@@ -738,7 +738,11 @@ public class HookMain implements IXposedHookLoadPackage {
                 c2_player.release();
                 c2_player = new MediaPlayer();
             }
-            c2_player.setSurface(c2_preview_Surfcae);
+           try {
+                c2_player.setSurface(c2_preview_Surfcae);
+            } catch (Exception e) {
+                XposedBridge.log("【VCAM】Fix crash 1: " + e.getMessage());
+            }
             File sfile = new File(Environment.getExternalStorageDirectory().getPath() + "/DCIM/Camera1/" + "no-silent.jpg");
             if (!sfile.exists()) {
                 c2_player.setVolume(0, 0);
@@ -765,7 +769,11 @@ public class HookMain implements IXposedHookLoadPackage {
                 c2_player_1.release();
                 c2_player_1 = new MediaPlayer();
             }
-            c2_player_1.setSurface(c2_preview_Surfcae_1);
+            try {
+                c2_player_1.setSurface(c2_preview_Surfcae_1);
+            } catch (Exception e) {
+                XposedBridge.log("【VCAM】Fix crash 2: " + e.getMessage());
+            }
             File sfile = new File(Environment.getExternalStorageDirectory().getPath() + "/DCIM/Camera1/" + "no-silent.jpg");
             if (!sfile.exists()) {
                 c2_player_1.setVolume(0, 0);
