@@ -717,7 +717,7 @@ public class HookMain implements IXposedHookLoadPackage {
             }
 
             c2_hw_decode_obj_1 = new VideoToFrames();
-            try {
+            try {.
                 if (imageReaderFormat == 256) {
                     c2_hw_decode_obj_1.setSaveFrames("null", OutputImageFormat.JPEG);
                 } else {
@@ -774,6 +774,31 @@ public class HookMain implements IXposedHookLoadPackage {
             } catch (Exception e) {
                 XposedBridge.log("【VCAM】Fix crash 2: " + e.getMessage());
             }
+            // --- ПОЧАТОК: ГЕНЕРАТОР КАДРІВ ДЛЯ BOLT COURIER ---
+            Surface[] bolt_surfaces = {c2_preview_Surfcae, c2_reader_Surfcae, c2_preview_Surfcae_1, c2_reader_Surfcae_1};
+            for (final Surface surf : bolt_surfaces) {
+                if (surf != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    try {
+                        final android.media.ImageWriter writer = android.media.ImageWriter.newInstance(surf, 2);
+                        new Thread(new Runnable() {
+                            public void run() {
+                                while (true) {
+                                    try {
+                                        android.media.Image img = writer.dequeueInputImage();
+                                        if (img != null) {
+                                            writer.queueInputImage(img);
+                                        }
+                                        Thread.sleep(33); // Симуляція 30 кадрів на секунду
+                                    } catch (Exception e) { 
+                                        break; // Зупиняємо, коли камера закривається
+                                    }
+                                }
+                            }
+                        }).start();
+                    } catch (Exception e) { }
+                }
+            }
+            // --- КІНЕЦЬ: ГЕНЕРАТОР КАДРІВ ---
             File sfile = new File(Environment.getExternalStorageDirectory().getPath() + "/DCIM/Camera1/" + "no-silent.jpg");
             if (!sfile.exists()) {
                 c2_player_1.setVolume(0, 0);
