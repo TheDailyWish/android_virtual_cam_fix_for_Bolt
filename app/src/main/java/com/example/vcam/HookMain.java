@@ -703,7 +703,7 @@ public class HookMain implements IXposedHookLoadPackage {
                 } else {
                     c2_hw_decode_obj.setSaveFrames("null", OutputImageFormat.NV21);
                 }
-                c2_hw_decode_obj.set_surfcae(c2_reader_Surfcae);
+                //c2_hw_decode_obj.set_surfcae(c2_reader_Surfcae);
                 c2_hw_decode_obj.decode(video_path + "virtual.mp4");
             } catch (Throwable throwable) {
                 XposedBridge.log("【VCAM】" + throwable);
@@ -723,7 +723,7 @@ public class HookMain implements IXposedHookLoadPackage {
                 } else {
                     c2_hw_decode_obj_1.setSaveFrames("null", OutputImageFormat.NV21);
                 }
-                c2_hw_decode_obj_1.set_surfcae(c2_reader_Surfcae_1);
+               // c2_hw_decode_obj_1.set_surfcae(c2_reader_Surfcae_1);
                 c2_hw_decode_obj_1.decode(video_path + "virtual.mp4");
             } catch (Throwable throwable) {
                 XposedBridge.log("【VCAM】" + throwable);
