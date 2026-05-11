@@ -717,7 +717,7 @@ public class HookMain implements IXposedHookLoadPackage {
             }
 
             c2_hw_decode_obj_1 = new VideoToFrames();
-            try {.
+            try {
                 if (imageReaderFormat == 256) {
                     c2_hw_decode_obj_1.setSaveFrames("null", OutputImageFormat.JPEG);
                 } else {
