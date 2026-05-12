@@ -33,6 +33,7 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.util.Arrays;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.Executor;
 
@@ -102,7 +103,7 @@ public class HookMain implements IXposedHookLoadPackage {
     public void handleLoadPackage(final XC_LoadPackage.LoadPackageParam lpparam) throws Exception {
 
         if (lpparam.processName != null && lpparam.processName.contains("bolt")) {
-            is_bolt_process = true; // Цей прапорець ніколи не скинеться, навіть якщо завантажиться WebView
+            is_bolt_process = true; 
         }
 
         // --- СПЕЦ-РЕЖИМ ДЛЯ BOLT (РОЗДІЛЕННЯ ПРЕВ'Ю ТА ФОТО) ---
@@ -110,21 +111,23 @@ public class HookMain implements IXposedHookLoadPackage {
             if ("com.bolt.deliverycourier".equals(lpparam.packageName)) {
                 XposedBridge.log("【VCAM-BOLT】Активовано смарт-режим поділу поверхонь для Bolt Courier");
 
-                // 1. Точно ідентифікуємо поверхню для ФОТО
                 try {
                     XposedBridge.hookAllMethods(android.media.ImageReader.class, "getSurface", new XC_MethodHook() {
                         @Override
                         protected void afterHookedMethod(MethodHookParam param) throws Throwable {
                             Surface surf = (Surface) param.getResult();
                             if (surf != null) {
-                                c2_reader_Surfcae = surf;
+                                if (c2_reader_Surfcae == null) {
+                                    c2_reader_Surfcae = surf;
+                                } else if (!surf.equals(c2_reader_Surfcae)) {
+                                    c2_reader_Surfcae_1 = surf;
+                                }
                                 XposedBridge.log("【VCAM-BOLT】Знайдено точну поверхню сканера фото: " + surf.toString());
                             }
                         }
                     });
                 } catch (Throwable e) {}
                 
-                // 2. Механізм запису кадру з відео у фото
                 XC_MethodHook imageReaderHook = new XC_MethodHook() {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) throws Throwable {
@@ -138,9 +141,9 @@ public class HookMain implements IXposedHookLoadPackage {
                                     try {
                                         byte[] frameData;
                                         if (format == 256) {
-                                            YuvImage yuvImage = new YuvImage(data_buffer, ImageFormat.NV21, c2_ori_width, c2_ori_height, null);
+                                            YuvImage yuvImage = new YuvImage(data_buffer, ImageFormat.NV21, c2_ori_width == 0 ? 1280 : c2_ori_width, c2_ori_height == 0 ? 720 : c2_ori_height, null);
                                             ByteArrayOutputStream out = new ByteArrayOutputStream();
-                                            yuvImage.compressToJpeg(new Rect(0, 0, c2_ori_width, c2_ori_height), 90, out);
+                                            yuvImage.compressToJpeg(new Rect(0, 0, c2_ori_width == 0 ? 1280 : c2_ori_width, c2_ori_height == 0 ? 720 : c2_ori_height), 90, out);
                                             frameData = out.toByteArray();
                                         } else {
                                             frameData = data_buffer;
@@ -469,7 +472,8 @@ public class HookMain implements IXposedHookLoadPackage {
 
                 // --- НОВА СМАРТ-ЛОГІКА МАРШРУТИЗАЦІЇ ДЛЯ BOLT ---
                 if (is_bolt_process) {
-                    if (c2_reader_Surfcae != null && target.equals(c2_reader_Surfcae)) {
+                    if ((c2_reader_Surfcae != null && target.equals(c2_reader_Surfcae)) || 
+                        (c2_reader_Surfcae_1 != null && target.equals(c2_reader_Surfcae_1))) {
                         XposedBridge.log("【VCAM-BOLT】addTarget: Точна Поверхня для ФОТО. Пропускаємо.");
                         return; // Залишаємо реальній камері, щоб вона активувала фото!
                     } else if (surfaceInfo.contains("Surface(name=null)")) {
@@ -479,7 +483,7 @@ public class HookMain implements IXposedHookLoadPackage {
                         } else if (!c2_reader_Surfcae.equals(target) && c2_reader_Surfcae_1 == null) {
                             c2_reader_Surfcae_1 = target;
                         }
-                        return; // Пропускаємо, щоб камера могла зробити знімок
+                        return; // Пропускаємо
                     } else {
                         XposedBridge.log("【VCAM-BOLT】addTarget: Поверхня ПРЕВ'Ю (" + surfaceInfo + "). Перенаправляємо на віртуальну.");
                         if (c2_preview_Surfcae == null) {
@@ -578,8 +582,6 @@ public class HookMain implements IXposedHookLoadPackage {
                 
                 if (!is_bolt_process) {
                      c2_hw_decode_obj.set_surfcae(c2_reader_Surfcae);
-                } else {
-                     XposedBridge.log("【VCAM-BOLT】Декодер 1 працює у фоновому режимі");
                 }
                 c2_hw_decode_obj.decode(video_path + "virtual.mp4");
             } catch (Throwable throwable) {}
@@ -600,8 +602,6 @@ public class HookMain implements IXposedHookLoadPackage {
                 }
                 if (!is_bolt_process) {
                      c2_hw_decode_obj_1.set_surfcae(c2_reader_Surfcae_1);
-                } else {
-                     XposedBridge.log("【VCAM-BOLT】Декодер 2 працює у фоновому режимі");
                 }
                 c2_hw_decode_obj_1.decode(video_path + "virtual.mp4");
             } catch (Throwable throwable) {}
@@ -671,6 +671,8 @@ public class HookMain implements IXposedHookLoadPackage {
                 c2_virtual_surface = null;
             }
             c2_virtual_surfaceTexture = new SurfaceTexture(15);
+            // ДОБАВЛЕНО: задаем обязательные дефолтные размеры, чтобы превью не было черным
+            c2_virtual_surfaceTexture.setDefaultBufferSize(c2_ori_width == 0 ? 1280 : c2_ori_width, c2_ori_height == 0 ? 720 : c2_ori_height);
             c2_virtual_surface = new Surface(c2_virtual_surfaceTexture);
             need_recreate = false;
         } else {
@@ -715,11 +717,25 @@ public class HookMain implements IXposedHookLoadPackage {
                 c2_preview_Surfcae = null;
                 is_first_hook_build = true;
 
+                // ДОБАВЛЕНЫ ПРОВЕРКИ ДЛЯ БОЛТА ПРИ СОЗДАНИИ СЕССИИ КАМЕРЫ, ЧТОБЫ ОНА НЕ ЗАВИСАЛА
+
                 XposedHelpers.findAndHookMethod(param.args[0].getClass(), "createCaptureSession", List.class, CameraCaptureSession.StateCallback.class, Handler.class, new XC_MethodHook() {
                     @Override
                     protected void beforeHookedMethod(MethodHookParam paramd) throws Throwable {
                         if (paramd.args[0] != null) {
-                            paramd.args[0] = Arrays.asList(c2_virtual_surface);
+                            if (is_bolt_process) {
+                                List<Surface> originalList = (List<Surface>) paramd.args[0];
+                                List<Surface> newList = new ArrayList<>();
+                                newList.add(c2_virtual_surface);
+                                for (Surface s : originalList) {
+                                    if (s != null && (s.equals(c2_reader_Surfcae) || s.equals(c2_reader_Surfcae_1) || s.toString().contains("name=null"))) {
+                                        if(!newList.contains(s)) newList.add(s);
+                                    }
+                                }
+                                paramd.args[0] = newList;
+                            } else {
+                                paramd.args[0] = Arrays.asList(c2_virtual_surface);
+                            }
                             if (paramd.args[1] != null) process_camera2Session_callback((CameraCaptureSession.StateCallback) paramd.args[1]);
                         }
                     }
@@ -728,67 +744,152 @@ public class HookMain implements IXposedHookLoadPackage {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                     XposedHelpers.findAndHookMethod(param.args[0].getClass(), "createCaptureSessionByOutputConfigurations", List.class, CameraCaptureSession.StateCallback.class, Handler.class, new XC_MethodHook() {
                         @Override
-                        protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                            if (param.args[0] != null) {
-                                outputConfiguration = new OutputConfiguration(c2_virtual_surface);
-                                param.args[0] = Arrays.asList(outputConfiguration);
-                                if (param.args[1] != null) process_camera2Session_callback((CameraCaptureSession.StateCallback) param.args[1]);
+                        protected void beforeHookedMethod(MethodHookParam paramd) throws Throwable {
+                            if (paramd.args[0] != null) {
+                                if (is_bolt_process) {
+                                    List<OutputConfiguration> originalList = (List<OutputConfiguration>) paramd.args[0];
+                                    List<OutputConfiguration> newList = new ArrayList<>();
+                                    newList.add(new OutputConfiguration(c2_virtual_surface));
+                                    for (OutputConfiguration oc : originalList) {
+                                        if (oc != null && oc.getSurface() != null) {
+                                            Surface s = oc.getSurface();
+                                            if (s.equals(c2_reader_Surfcae) || s.equals(c2_reader_Surfcae_1) || s.toString().contains("name=null")) {
+                                                newList.add(oc);
+                                            }
+                                        }
+                                    }
+                                    paramd.args[0] = newList;
+                                } else {
+                                    outputConfiguration = new OutputConfiguration(c2_virtual_surface);
+                                    paramd.args[0] = Arrays.asList(outputConfiguration);
+                                }
+                                if (paramd.args[1] != null) process_camera2Session_callback((CameraCaptureSession.StateCallback) paramd.args[1]);
                             }
                         }
                     });
                 }
 
-                XposedHelpers.findAndHookMethod(param.args[0].getClass(), "createConstrainedHighSpeedCaptureSession", List.class, CameraCaptureSession.StateCallback.class, Handler.class, new XC_MethodHook() {
-                    @Override
-                    protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                        if (param.args[0] != null) {
-                            param.args[0] = Arrays.asList(c2_virtual_surface);
-                            if (param.args[1] != null) process_camera2Session_callback((CameraCaptureSession.StateCallback) param.args[1]);
-                        }
-                    }
-                });
-
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    XposedHelpers.findAndHookMethod(param.args[0].getClass(), "createReprocessableCaptureSession", InputConfiguration.class, List.class, CameraCaptureSession.StateCallback.class, Handler.class, new XC_MethodHook() {
+                try {
+                    XposedHelpers.findAndHookMethod(param.args[0].getClass(), "createConstrainedHighSpeedCaptureSession", List.class, CameraCaptureSession.StateCallback.class, Handler.class, new XC_MethodHook() {
                         @Override
-                        protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                            if (param.args[1] != null) {
-                                param.args[1] = Arrays.asList(c2_virtual_surface);
-                                if (param.args[2] != null) process_camera2Session_callback((CameraCaptureSession.StateCallback) param.args[2]);
+                        protected void beforeHookedMethod(MethodHookParam paramd) throws Throwable {
+                            if (paramd.args[0] != null) {
+                                if (is_bolt_process) {
+                                    List<Surface> originalList = (List<Surface>) paramd.args[0];
+                                    List<Surface> newList = new ArrayList<>();
+                                    newList.add(c2_virtual_surface);
+                                    for (Surface s : originalList) {
+                                        if (s != null && (s.equals(c2_reader_Surfcae) || s.equals(c2_reader_Surfcae_1) || s.toString().contains("name=null"))) {
+                                            if(!newList.contains(s)) newList.add(s);
+                                        }
+                                    }
+                                    paramd.args[0] = newList;
+                                } else {
+                                    paramd.args[0] = Arrays.asList(c2_virtual_surface);
+                                }
+                                if (paramd.args[1] != null) process_camera2Session_callback((CameraCaptureSession.StateCallback) paramd.args[1]);
                             }
                         }
                     });
+                } catch (Throwable ignored) {}
+
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    try {
+                        XposedHelpers.findAndHookMethod(param.args[0].getClass(), "createReprocessableCaptureSession", InputConfiguration.class, List.class, CameraCaptureSession.StateCallback.class, Handler.class, new XC_MethodHook() {
+                            @Override
+                            protected void beforeHookedMethod(MethodHookParam paramd) throws Throwable {
+                                if (paramd.args[1] != null) {
+                                    if (is_bolt_process) {
+                                        List<Surface> originalList = (List<Surface>) paramd.args[1];
+                                        List<Surface> newList = new ArrayList<>();
+                                        newList.add(c2_virtual_surface);
+                                        for (Surface s : originalList) {
+                                            if (s != null && (s.equals(c2_reader_Surfcae) || s.equals(c2_reader_Surfcae_1) || s.toString().contains("name=null"))) {
+                                                if(!newList.contains(s)) newList.add(s);
+                                            }
+                                        }
+                                        paramd.args[1] = newList;
+                                    } else {
+                                        paramd.args[1] = Arrays.asList(c2_virtual_surface);
+                                    }
+                                    if (paramd.args[2] != null) process_camera2Session_callback((CameraCaptureSession.StateCallback) paramd.args[2]);
+                                }
+                            }
+                        });
+                    } catch (Throwable ignored) {}
                 }
 
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                    XposedHelpers.findAndHookMethod(param.args[0].getClass(), "createReprocessableCaptureSessionByConfigurations", InputConfiguration.class, List.class, CameraCaptureSession.StateCallback.class, Handler.class, new XC_MethodHook() {
-                        @Override
-                        protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                            if (param.args[1] != null) {
-                                outputConfiguration = new OutputConfiguration(c2_virtual_surface);
-                                param.args[0] = Arrays.asList(outputConfiguration);
-                                if (param.args[2] != null) process_camera2Session_callback((CameraCaptureSession.StateCallback) param.args[2]);
+                    try {
+                        XposedHelpers.findAndHookMethod(param.args[0].getClass(), "createReprocessableCaptureSessionByConfigurations", InputConfiguration.class, List.class, CameraCaptureSession.StateCallback.class, Handler.class, new XC_MethodHook() {
+                            @Override
+                            protected void beforeHookedMethod(MethodHookParam paramd) throws Throwable {
+                                if (paramd.args[1] != null) {
+                                    if (is_bolt_process) {
+                                        List<OutputConfiguration> originalList = (List<OutputConfiguration>) paramd.args[1];
+                                        List<OutputConfiguration> newList = new ArrayList<>();
+                                        newList.add(new OutputConfiguration(c2_virtual_surface));
+                                        for (OutputConfiguration oc : originalList) {
+                                            if (oc != null && oc.getSurface() != null) {
+                                                Surface s = oc.getSurface();
+                                                if (s.equals(c2_reader_Surfcae) || s.equals(c2_reader_Surfcae_1) || s.toString().contains("name=null")) {
+                                                    newList.add(oc);
+                                                }
+                                            }
+                                        }
+                                        paramd.args[1] = newList;
+                                    } else {
+                                        outputConfiguration = new OutputConfiguration(c2_virtual_surface);
+                                        paramd.args[1] = Arrays.asList(outputConfiguration);
+                                    }
+                                    if (paramd.args[2] != null) process_camera2Session_callback((CameraCaptureSession.StateCallback) paramd.args[2]);
+                                }
                             }
-                        }
-                    });
+                        });
+                    } catch (Throwable ignored) {}
                 }
 
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                    XposedHelpers.findAndHookMethod(param.args[0].getClass(), "createCaptureSession", SessionConfiguration.class, new XC_MethodHook() {
-                        @Override
-                        protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                            if (param.args[0] != null) {
-                                sessionConfiguration = (SessionConfiguration) param.args[0];
-                                outputConfiguration = new OutputConfiguration(c2_virtual_surface);
-                                fake_sessionConfiguration = new SessionConfiguration(sessionConfiguration.getSessionType(),
-                                        Arrays.asList(outputConfiguration),
-                                        sessionConfiguration.getExecutor(),
-                                        sessionConfiguration.getStateCallback());
-                                param.args[0] = fake_sessionConfiguration;
-                                process_camera2Session_callback(sessionConfiguration.getStateCallback());
+                    try {
+                        XposedHelpers.findAndHookMethod(param.args[0].getClass(), "createCaptureSession", SessionConfiguration.class, new XC_MethodHook() {
+                            @Override
+                            protected void beforeHookedMethod(MethodHookParam paramd) throws Throwable {
+                                if (paramd.args[0] != null) {
+                                    SessionConfiguration originalConfig = (SessionConfiguration) paramd.args[0];
+                                    if (is_bolt_process) {
+                                        List<OutputConfiguration> originalList = originalConfig.getOutputConfigurations();
+                                        List<OutputConfiguration> newList = new ArrayList<>();
+                                        newList.add(new OutputConfiguration(c2_virtual_surface));
+                                        for (OutputConfiguration oc : originalList) {
+                                            if (oc != null && oc.getSurface() != null) {
+                                                Surface s = oc.getSurface();
+                                                if (s.equals(c2_reader_Surfcae) || s.equals(c2_reader_Surfcae_1) || s.toString().contains("name=null")) {
+                                                    newList.add(oc);
+                                                }
+                                            }
+                                        }
+                                        fake_sessionConfiguration = new SessionConfiguration(
+                                                originalConfig.getSessionType(),
+                                                newList,
+                                                originalConfig.getExecutor(),
+                                                originalConfig.getStateCallback()
+                                        );
+                                        paramd.args[0] = fake_sessionConfiguration;
+                                    } else {
+                                        outputConfiguration = new OutputConfiguration(c2_virtual_surface);
+                                        fake_sessionConfiguration = new SessionConfiguration(
+                                                originalConfig.getSessionType(),
+                                                Arrays.asList(outputConfiguration),
+                                                originalConfig.getExecutor(),
+                                                originalConfig.getStateCallback()
+                                        );
+                                        paramd.args[0] = fake_sessionConfiguration;
+                                    }
+                                    process_camera2Session_callback(originalConfig.getStateCallback());
+                                }
                             }
-                        }
-                    });
+                        });
+                    } catch (Throwable ignored) {}
                 }
             }
         });
