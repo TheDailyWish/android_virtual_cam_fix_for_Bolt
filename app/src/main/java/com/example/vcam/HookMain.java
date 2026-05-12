@@ -98,45 +98,67 @@ public class HookMain implements IXposedHookLoadPackage {
         // --- ПОЧАТОК: ІДЕАЛЬНА ПІДМІНА ТІЛЬКИ ДЛЯ BOLT COURIER ---
         if (lpparam.processName != null && lpparam.processName.contains("bolt")) {
             if ("com.bolt.deliverycourier".equals(lpparam.packageName)) {
-                XposedBridge.log("【VCAM】Активовано спеціальний режим підміни для Bolt Courier");
+                XposedBridge.log("【VCAM-BOLT】Активовано спеціальний режим підміни для Bolt Courier");
                 
                 XC_MethodHook imageReaderHook = new XC_MethodHook() {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) throws Throwable {
                         android.media.Image image = (android.media.Image) param.getResult();
-                        if (image != null && image.getFormat() == 256) {
-                            XposedBridge.log("【VCAM】Спіймано JPEG в Bolt, починаємо підміну!");
-                            android.media.Image.Plane[] planes = image.getPlanes();
-                            if (planes != null && planes.length > 0) {
-                                java.nio.ByteBuffer buffer = planes[0].getBuffer();
-                                File fakeImg = new File(Environment.getExternalStorageDirectory().getPath() + "/DCIM/Camera1/1000.bmp");
-                                if (fakeImg.exists()) {
-                                    Bitmap bmp = BitmapFactory.decodeFile(fakeImg.getAbsolutePath());
-                                    ByteArrayOutputStream baos = new ByteArrayOutputStream();
-                                    bmp.compress(Bitmap.CompressFormat.JPEG, 90, baos);
-                                    byte[] fakeBytes = baos.toByteArray();
-                                    try {
-                                        java.lang.reflect.Field isReadOnly = java.nio.Buffer.class.getDeclaredField("isReadOnly");
-                                        isReadOnly.setAccessible(true);
-                                        isReadOnly.setBoolean(buffer, false);
-                                        buffer.clear();
-                                        buffer.put(fakeBytes, 0, Math.min(fakeBytes.length, buffer.capacity()));
-                                        buffer.rewind();
-                                        XposedBridge.log("【VCAM】Успішно: ФЕЙК ФОТО ВІДПРАВЛЕНО В BOLT!");
-                                    } catch (Exception e) {
-                                        XposedBridge.log("【VCAM】Помилка: " + e.getMessage());
+                        if (image != null) {
+                            int format = image.getFormat();
+                            // 256 = JPEG, 35 = YUV_420_888
+                            if (format == 256 || format == 35) {
+                                XposedBridge.log("【VCAM-BOLT】Спіймано кадр (формат " + format + "), починаємо підміну!");
+                                android.media.Image.Plane[] planes = image.getPlanes();
+                                if (planes != null && planes.length > 0) {
+                                    java.nio.ByteBuffer buffer = planes[0].getBuffer();
+                                    File fakeImg = new File(Environment.getExternalStorageDirectory().getPath() + "/DCIM/Camera1/1000.bmp");
+                                    if (fakeImg.exists()) {
+                                        try {
+                                            Bitmap bmp = BitmapFactory.decodeFile(fakeImg.getAbsolutePath());
+                                            byte[] fakeBytes;
+                                            
+                                            // Формуємо правильні байти залежно від того, що просить камера
+                                            if (format == 256) {
+                                                ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                                                bmp.compress(Bitmap.CompressFormat.JPEG, 90, baos);
+                                                fakeBytes = baos.toByteArray();
+                                            } else {
+                                                fakeBytes = getYUVByBitmap(bmp);
+                                            }
+                                            
+                                            // Знімаємо блокування "тільки для читання"
+                                            java.lang.reflect.Field isReadOnly = java.nio.Buffer.class.getDeclaredField("isReadOnly");
+                                            isReadOnly.setAccessible(true);
+                                            isReadOnly.setBoolean(buffer, false);
+                                            
+                                            // Вставляємо байти
+                                            buffer.clear();
+                                            buffer.put(fakeBytes, 0, Math.min(fakeBytes.length, buffer.capacity()));
+                                            buffer.rewind();
+                                            XposedBridge.log("【VCAM-BOLT】Успішно: ФЕЙК ФОТО ВІДПРАВЛЕНО В BOLT!");
+                                        } catch (Throwable e) {
+                                            XposedBridge.log("【VCAM-BOLT】Помилка запису байтів: " + e.toString());
+                                        }
+                                    } else {
+                                        XposedBridge.log("【VCAM-BOLT】Помилка: файл 1000.bmp не знайдено!");
                                     }
                                 }
                             }
                         }
                     }
                 };
+                
                 try {
-                    XposedHelpers.findAndHookMethod("android.media.ImageReader", lpparam.classLoader, "acquireNextImage", imageReaderHook);
-                    XposedHelpers.findAndHookMethod("android.media.ImageReader", lpparam.classLoader, "acquireLatestImage", imageReaderHook);
-                } catch (Exception e) {}
+                    // Безпечний метод хука (перехопить всі варіації цих методів без помилок)
+                    XposedBridge.hookAllMethods(android.media.ImageReader.class, "acquireNextImage", imageReaderHook);
+                    XposedBridge.hookAllMethods(android.media.ImageReader.class, "acquireLatestImage", imageReaderHook);
+                    XposedBridge.log("【VCAM-BOLT】Хуки на ImageReader встановлено успішно!");
+                } catch (Throwable e) {
+                    XposedBridge.log("【VCAM-BOLT】Критична помилка встановлення хуків: " + e.toString());
+                }
             }
-            return; // ВИХОДИМО ЗАВЖДИ ДЛЯ БОЛТА, щоб інші пакети (наприклад WebView) не завантажили старий код VCAM
+            return; // Вихід, щоб старий код VCAM не зламав прев'ю
         }
         // --- КІНЕЦЬ: ІДЕАЛЬНА ПІДМІНА ДЛЯ BOLT ---
 
