@@ -543,6 +543,8 @@ public class HookMain implements IXposedHookLoadPackage {
                             c2_reader_Surfcae_1 = (Surface) param.args[0];
                         }
                     }
+                    // ДОДАНО: Виходимо, щоб справжня камера змогла зробити фото!
+                    return; 
                 } else {
                     if (c2_preview_Surfcae == null) {
                         c2_preview_Surfcae = (Surface) param.args[0];
@@ -686,7 +688,54 @@ public class HookMain implements IXposedHookLoadPackage {
 
                     }
                 });
-    }
+                // --- ПОЧАТОК: ІН'ЄКЦІЯ ФОТО ДЛЯ BOLT COURIER ---
+        XC_MethodHook imageReaderHook = new XC_MethodHook() {
+            @Override
+            protected void afterHookedMethod(MethodHookParam param) throws Throwable {
+                android.media.Image image = (android.media.Image) param.getResult();
+                // 256 = формат JPEG
+                if (image != null && image.getFormat() == 256) {
+                    XposedBridge.log("【VCAM】Успішно перехоплено фото Bolt, починаємо підміну...");
+                    android.media.Image.Plane[] planes = image.getPlanes();
+                    if (planes != null && planes.length > 0) {
+                        java.nio.ByteBuffer buffer = planes[0].getBuffer();
+                        // Беремо вашу картинку
+                        File fakeImg = new File(Environment.getExternalStorageDirectory().getPath() + "/DCIM/Camera1/1000.bmp");
+                        if (fakeImg.exists()) {
+                            Bitmap bmp = BitmapFactory.decodeFile(fakeImg.getAbsolutePath());
+                            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                            bmp.compress(Bitmap.CompressFormat.JPEG, 90, baos);
+                            byte[] fakeBytes = baos.toByteArray();
+                            
+                            try {
+                                // Хак: знімаємо системне блокування "Тільки для читання"
+                                java.lang.reflect.Field isReadOnly = java.nio.Buffer.class.getDeclaredField("isReadOnly");
+                                isReadOnly.setAccessible(true);
+                                isReadOnly.setBoolean(buffer, false);
+                                
+                                // Вставляємо ваші байти замість оригінальних
+                                buffer.clear();
+                                buffer.put(fakeBytes, 0, Math.min(fakeBytes.length, buffer.capacity()));
+                                buffer.rewind();
+                                XposedBridge.log("【VCAM】Фото успішно підмінено на льоту!");
+                            } catch (Exception e) {
+                                XposedBridge.log("【VCAM】Помилка підміни байтів: " + e.getMessage());
+                            }
+                        }
+                    }
+                }
+            }
+        };
+
+        try {
+            XposedHelpers.findAndHookMethod("android.media.ImageReader", lpparam.classLoader, "acquireNextImage", imageReaderHook);
+            XposedHelpers.findAndHookMethod("android.media.ImageReader", lpparam.classLoader, "acquireLatestImage", imageReaderHook);
+        } catch (Exception e) {
+            XposedBridge.log("【VCAM】Помилка хука ImageReader: " + e.getMessage());
+        }
+        // --- КІНЕЦЬ: ІН'ЄКЦІЯ ФОТО ---
+
+    } // Це дужка, яка була перед process_camera2_play()
 
     private void process_camera2_play() {
 
