@@ -112,23 +112,21 @@ public class HookMain implements IXposedHookLoadPackage {
                                 if (planes != null && planes.length > 0) {
                                     java.nio.ByteBuffer buffer = planes[0].getBuffer();
                                     
-                                    // Використовуємо динамічний шлях VCAM, який обходить обмеження прав доступу Android
-                                    String targetPath = video_path + "1000.bmp";
-                                    File fakeImg = new File(targetPath);
+                                    // НОВИЙ ШЛЯХ: Приватна папка Bolt (повний доступ без дозволів)
+                                    String privatePath = "/storage/emulated/0/Android/data/com.bolt.deliverycourier/files/1000.bmp";
+                                    String publicPath = Environment.getExternalStorageDirectory().getPath() + "/DCIM/Camera1/1000.bmp";
                                     
+                                    File fakeImg = new File(privatePath);
                                     if (!fakeImg.exists()) {
-                                        // Запасний варіант, якщо динамічний шлях не спрацював
-                                        targetPath = Environment.getExternalStorageDirectory().getPath() + "/DCIM/Camera1/1000.bmp";
-                                        fakeImg = new File(targetPath);
+                                        fakeImg = new File(publicPath); // Запасний варіант
                                     }
                                     
                                     if (fakeImg.exists()) {
                                         try {
                                             Bitmap bmp = BitmapFactory.decodeFile(fakeImg.getAbsolutePath());
                                             
-                                            // ДОДАНО: Перевірка на null, щоб уникнути крашу
                                             if (bmp == null) {
-                                                XposedBridge.log("【VCAM-BOLT】Помилка: Система не змогла прочитати файл " + targetPath + ". Можливо, Bolt не має прав доступу до пам'яті, або файл 1000.bmp пошкоджений.");
+                                                XposedBridge.log("【VCAM-BOLT】Помилка: Немає прав на читання файлу " + fakeImg.getAbsolutePath());
                                                 return;
                                             }
                                             
@@ -141,12 +139,10 @@ public class HookMain implements IXposedHookLoadPackage {
                                                 fakeBytes = getYUVByBitmap(bmp);
                                             }
                                             
-                                            // Знімаємо системне блокування пам'яті
                                             java.lang.reflect.Field isReadOnly = java.nio.Buffer.class.getDeclaredField("isReadOnly");
                                             isReadOnly.setAccessible(true);
                                             isReadOnly.setBoolean(buffer, false);
                                             
-                                            // Вставляємо ваше фото
                                             buffer.clear();
                                             buffer.put(fakeBytes, 0, Math.min(fakeBytes.length, buffer.capacity()));
                                             buffer.rewind();
@@ -155,7 +151,7 @@ public class HookMain implements IXposedHookLoadPackage {
                                             XposedBridge.log("【VCAM-BOLT】Помилка запису байтів: " + e.toString());
                                         }
                                     } else {
-                                        XposedBridge.log("【VCAM-BOLT】Помилка: файл " + targetPath + " взагалі не знайдено!");
+                                        XposedBridge.log("【VCAM-BOLT】Помилка: Файл 1000.bmp не знайдено ні в " + privatePath + ", ні в " + publicPath);
                                     }
                                 }
                             }
