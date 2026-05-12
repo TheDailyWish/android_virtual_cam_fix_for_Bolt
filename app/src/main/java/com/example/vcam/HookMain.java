@@ -97,7 +97,7 @@ public class HookMain implements IXposedHookLoadPackage {
     public static Class c2_state_callback;
     public Context toast_content;
 
-    // Глобальний і надійний прапорець процесу Bolt
+    // Прапорець для Bolt Courier
     public static boolean is_bolt_process = false;
 
     public void handleLoadPackage(final XC_LoadPackage.LoadPackageParam lpparam) throws Exception {
@@ -106,28 +106,11 @@ public class HookMain implements IXposedHookLoadPackage {
             is_bolt_process = true; 
         }
 
-        // --- СПЕЦ-РЕЖИМ ДЛЯ BOLT (РОЗДІЛЕННЯ ПРЕВ'Ю ТА ФОТО) ---
+        // --- ГІБРИДНИЙ РЕЖИМ ДЛЯ BOLT (Реальне прев'ю + Фото з відео) ---
         if (is_bolt_process) {
             if ("com.bolt.deliverycourier".equals(lpparam.packageName)) {
-                XposedBridge.log("【VCAM-BOLT】Активовано смарт-режим поділу поверхонь для Bolt Courier");
+                XposedBridge.log("【VCAM-BOLT】Активовано гібридний режим: Реальне прев'ю + Фото з відео");
 
-                try {
-                    XposedBridge.hookAllMethods(android.media.ImageReader.class, "getSurface", new XC_MethodHook() {
-                        @Override
-                        protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-                            Surface surf = (Surface) param.getResult();
-                            if (surf != null) {
-                                if (c2_reader_Surfcae == null) {
-                                    c2_reader_Surfcae = surf;
-                                } else if (!surf.equals(c2_reader_Surfcae)) {
-                                    c2_reader_Surfcae_1 = surf;
-                                }
-                                XposedBridge.log("【VCAM-BOLT】Знайдено точну поверхню сканера фото: " + surf.toString());
-                            }
-                        }
-                    });
-                } catch (Throwable e) {}
-                
                 XC_MethodHook imageReaderHook = new XC_MethodHook() {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) throws Throwable {
@@ -181,7 +164,7 @@ public class HookMain implements IXposedHookLoadPackage {
                                                 } catch (Throwable e2) {}
                                             }
                                             if (copied) {
-                                                XposedBridge.log("【VCAM-BOLT】Успішно: Синхронний кадр з відео вставлено в фото!");
+                                                XposedBridge.log("【VCAM-BOLT】Успішно: Кадр з фонового відео вставлено в фото!");
                                             }
                                         }
                                     } catch (Throwable e) {
@@ -470,26 +453,13 @@ public class HookMain implements IXposedHookLoadPackage {
                 Surface target = (Surface) param.args[0];
                 String surfaceInfo = target.toString();
 
-                // --- НОВА СМАРТ-ЛОГІКА МАРШРУТИЗАЦІЇ ДЛЯ BOLT ---
+                // --- КЛЮЧОВИЙ МОМЕНТ: Для Bolt ми залишаємо всі поверхні як є ---
                 if (is_bolt_process) {
-                    if ((c2_reader_Surfcae != null && target.equals(c2_reader_Surfcae)) || 
-                        (c2_reader_Surfcae_1 != null && target.equals(c2_reader_Surfcae_1))) {
-                        XposedBridge.log("【VCAM-BOLT】addTarget: Точна Поверхня для ФОТО. Пропускаємо.");
-                        return; // Дозволяємо камері зробити фото
-                    } else {
-                        // ТУТ БУЛА ПРОБЛЕМА: ми пропускали прев'ю, якщо воно мало ім'я null.
-                        // Тепер ми перенаправляємо АБСОЛЮТНО ВСЕ (що не є фото-сканером) на віртуальну поверхню.
-                        XposedBridge.log("【VCAM-BOLT】addTarget: Поверхня ПРЕВ'Ю/АНАЛІЗУ (" + surfaceInfo + "). Перенаправляємо на віртуальну.");
-                        if (c2_preview_Surfcae == null) {
-                            c2_preview_Surfcae = target;
-                        } else if (!c2_preview_Surfcae.equals(target) && c2_preview_Surfcae_1 == null) {
-                            c2_preview_Surfcae_1 = target;
-                        }
-                        param.args[0] = c2_virtual_surface; // Відключаємо реальну камеру від цього екрану!
-                        return;
-                    }
+                    // Жодних перенаправлень, жодних віртуальних смітників. 
+                    // Дозволяємо камері працювати на 100% природно.
+                    return; 
                 }
-                // --- КІНЕЦЬ НОВОЇ ЛОГІКИ ---
+                // --- КІНЕЦЬ ---
 
                 if (surfaceInfo.contains("Surface(name=null)")) {
                     if (c2_reader_Surfcae == null) {
@@ -517,6 +487,7 @@ public class HookMain implements IXposedHookLoadPackage {
             protected void beforeHookedMethod(MethodHookParam param) {
                 if (param.args[0] == null) return;
                 if (param.thisObject == null) return;
+                if (is_bolt_process) return; // Пропускаємо для Bolt
                 
                 Surface rm_surf = (Surface) param.args[0];
                 if (rm_surf.equals(c2_preview_Surfcae)) c2_preview_Surfcae = null;
@@ -560,7 +531,7 @@ public class HookMain implements IXposedHookLoadPackage {
 
     private void process_camera2_play() {
 
-        // ГАРАНТІЯ: Декодер відео тепер запускається завжди, щоб наповнювати data_buffer
+        // --- ДЕКОДУВАННЯ ВІДЕО У ФОНІ ДЛЯ BOLT ---
         if (c2_hw_decode_obj != null) {
             c2_hw_decode_obj.stopDecode();
             c2_hw_decode_obj = null;
@@ -577,10 +548,15 @@ public class HookMain implements IXposedHookLoadPackage {
             if (!is_bolt_process) {
                  if(c2_reader_Surfcae != null) c2_hw_decode_obj.set_surfcae(c2_reader_Surfcae);
             } else {
-                 XposedBridge.log("【VCAM-BOLT】Декодер 1 працює у фоновому режимі");
+                 XposedBridge.log("【VCAM-BOLT】Декодер відео тихо працює у фоновому режимі");
             }
             c2_hw_decode_obj.decode(video_path + "virtual.mp4");
         } catch (Throwable throwable) {}
+
+        // ------------------------------------------
+        // Якщо це Bolt, ми НЕ запускаємо MediaPlayer, щоб уникнути крашів прев'ю
+        if (is_bolt_process) return;
+        // ------------------------------------------
 
         if (c2_reader_Surfcae_1 != null) {
             if (c2_hw_decode_obj_1 != null) {
@@ -595,11 +571,7 @@ public class HookMain implements IXposedHookLoadPackage {
                 } else {
                     c2_hw_decode_obj_1.setSaveFrames("null", OutputImageFormat.NV21);
                 }
-                if (!is_bolt_process) {
-                     c2_hw_decode_obj_1.set_surfcae(c2_reader_Surfcae_1);
-                } else {
-                     XposedBridge.log("【VCAM-BOLT】Декодер 2 працює у фоновому режимі");
-                }
+                c2_hw_decode_obj_1.set_surfcae(c2_reader_Surfcae_1);
                 c2_hw_decode_obj_1.decode(video_path + "virtual.mp4");
             } catch (Throwable throwable) {}
         }
@@ -713,19 +685,11 @@ public class HookMain implements IXposedHookLoadPackage {
                 c2_preview_Surfcae = null;
                 is_first_hook_build = true;
 
-                // ДОБАВЛЯЄМО ВСІ ПОВЕРХНІ В СЕСІЮ ДЛЯ УНИКНЕННЯ КРАШУ
-
                 XposedHelpers.findAndHookMethod(param.args[0].getClass(), "createCaptureSession", List.class, CameraCaptureSession.StateCallback.class, Handler.class, new XC_MethodHook() {
                     @Override
                     protected void beforeHookedMethod(MethodHookParam paramd) throws Throwable {
                         if (paramd.args[0] != null) {
-                            if (is_bolt_process) {
-                                List<Surface> originalList = (List<Surface>) paramd.args[0];
-                                List<Surface> newList = new ArrayList<>();
-                                newList.add(c2_virtual_surface);
-                                if (originalList != null) newList.addAll(originalList);
-                                paramd.args[0] = newList;
-                            } else {
+                            if (!is_bolt_process) {
                                 paramd.args[0] = Arrays.asList(c2_virtual_surface);
                             }
                             if (paramd.args[1] != null) process_camera2Session_callback((CameraCaptureSession.StateCallback) paramd.args[1]);
@@ -738,13 +702,7 @@ public class HookMain implements IXposedHookLoadPackage {
                         @Override
                         protected void beforeHookedMethod(MethodHookParam paramd) throws Throwable {
                             if (paramd.args[0] != null) {
-                                if (is_bolt_process) {
-                                    List<OutputConfiguration> originalList = (List<OutputConfiguration>) paramd.args[0];
-                                    List<OutputConfiguration> newList = new ArrayList<>();
-                                    newList.add(new OutputConfiguration(c2_virtual_surface));
-                                    if (originalList != null) newList.addAll(originalList);
-                                    paramd.args[0] = newList;
-                                } else {
+                                if (!is_bolt_process) {
                                     outputConfiguration = new OutputConfiguration(c2_virtual_surface);
                                     paramd.args[0] = Arrays.asList(outputConfiguration);
                                 }
@@ -759,13 +717,7 @@ public class HookMain implements IXposedHookLoadPackage {
                         @Override
                         protected void beforeHookedMethod(MethodHookParam paramd) throws Throwable {
                             if (paramd.args[0] != null) {
-                                if (is_bolt_process) {
-                                    List<Surface> originalList = (List<Surface>) paramd.args[0];
-                                    List<Surface> newList = new ArrayList<>();
-                                    newList.add(c2_virtual_surface);
-                                    if (originalList != null) newList.addAll(originalList);
-                                    paramd.args[0] = newList;
-                                } else {
+                                if (!is_bolt_process) {
                                     paramd.args[0] = Arrays.asList(c2_virtual_surface);
                                 }
                                 if (paramd.args[1] != null) process_camera2Session_callback((CameraCaptureSession.StateCallback) paramd.args[1]);
@@ -780,13 +732,7 @@ public class HookMain implements IXposedHookLoadPackage {
                             @Override
                             protected void beforeHookedMethod(MethodHookParam paramd) throws Throwable {
                                 if (paramd.args[1] != null) {
-                                    if (is_bolt_process) {
-                                        List<Surface> originalList = (List<Surface>) paramd.args[1];
-                                        List<Surface> newList = new ArrayList<>();
-                                        newList.add(c2_virtual_surface);
-                                        if (originalList != null) newList.addAll(originalList);
-                                        paramd.args[1] = newList;
-                                    } else {
+                                    if (!is_bolt_process) {
                                         paramd.args[1] = Arrays.asList(c2_virtual_surface);
                                     }
                                     if (paramd.args[2] != null) process_camera2Session_callback((CameraCaptureSession.StateCallback) paramd.args[2]);
@@ -802,13 +748,7 @@ public class HookMain implements IXposedHookLoadPackage {
                             @Override
                             protected void beforeHookedMethod(MethodHookParam paramd) throws Throwable {
                                 if (paramd.args[1] != null) {
-                                    if (is_bolt_process) {
-                                        List<OutputConfiguration> originalList = (List<OutputConfiguration>) paramd.args[1];
-                                        List<OutputConfiguration> newList = new ArrayList<>();
-                                        newList.add(new OutputConfiguration(c2_virtual_surface));
-                                        if (originalList != null) newList.addAll(originalList);
-                                        paramd.args[1] = newList;
-                                    } else {
+                                    if (!is_bolt_process) {
                                         outputConfiguration = new OutputConfiguration(c2_virtual_surface);
                                         paramd.args[1] = Arrays.asList(outputConfiguration);
                                     }
@@ -826,20 +766,7 @@ public class HookMain implements IXposedHookLoadPackage {
                             protected void beforeHookedMethod(MethodHookParam paramd) throws Throwable {
                                 if (paramd.args[0] != null) {
                                     SessionConfiguration originalConfig = (SessionConfiguration) paramd.args[0];
-                                    if (is_bolt_process) {
-                                        List<OutputConfiguration> originalList = originalConfig.getOutputConfigurations();
-                                        List<OutputConfiguration> newList = new ArrayList<>();
-                                        newList.add(new OutputConfiguration(c2_virtual_surface));
-                                        if (originalList != null) newList.addAll(originalList);
-                                        
-                                        fake_sessionConfiguration = new SessionConfiguration(
-                                                originalConfig.getSessionType(),
-                                                newList,
-                                                originalConfig.getExecutor(),
-                                                originalConfig.getStateCallback()
-                                        );
-                                        paramd.args[0] = fake_sessionConfiguration;
-                                    } else {
+                                    if (!is_bolt_process) {
                                         outputConfiguration = new OutputConfiguration(c2_virtual_surface);
                                         fake_sessionConfiguration = new SessionConfiguration(
                                                 originalConfig.getSessionType(),
