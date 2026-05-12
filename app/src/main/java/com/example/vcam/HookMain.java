@@ -8,6 +8,9 @@ import android.content.pm.PackageManager;
 import android.content.res.Resources;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.ImageFormat;
+import android.graphics.Rect;
+import android.graphics.YuvImage;
 import android.graphics.SurfaceTexture;
 import android.hardware.Camera;
 import android.hardware.camera2.CameraCaptureSession;
@@ -95,107 +98,76 @@ public class HookMain implements IXposedHookLoadPackage {
 
     public void handleLoadPackage(final XC_LoadPackage.LoadPackageParam lpparam) throws Exception {
 
-        // --- ПОЧАТОК: ІДЕАЛЬНА ПІДМІНА ТІЛЬКИ ДЛЯ BOLT COURIER (ВАРІАНТ Б - З ВІДЕО) ---
+        // --- СПЕЦ-РЕЖИМ ДЛЯ BOLT (ВІДЕО-ПРЕВ'Ю + ВІДЕО-ФОТО) ---
         if (lpparam.processName != null && lpparam.processName.contains("bolt")) {
             if ("com.bolt.deliverycourier".equals(lpparam.packageName)) {
-                XposedBridge.log("【VCAM-BOLT】Активовано режим: Випадковий кадр з virtual.mp4");
+                XposedBridge.log("【VCAM-BOLT】Активовано повну підміну відео для Bolt Courier");
                 
                 XC_MethodHook imageReaderHook = new XC_MethodHook() {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) throws Throwable {
                         android.media.Image image = (android.media.Image) param.getResult();
-                        if (image != null) {
+                        // Перевіряємо, чи є кадр у буфері VideoToFrames
+                        if (image != null && data_buffer != null && data_buffer.length > 10) {
                             int format = image.getFormat();
                             if (format == 256 || format == 35) {
-                                XposedBridge.log("【VCAM-BOLT】Спіймано кадр (формат " + format + "), починаємо підміну з відео!");
                                 android.media.Image.Plane[] planes = image.getPlanes();
                                 if (planes != null && planes.length > 0) {
                                     java.nio.ByteBuffer buffer = planes[0].getBuffer();
                                     
-                                    // Шукаємо virtual.mp4 замість 1000.bmp
-                                    String privatePath = "/storage/emulated/0/Android/data/com.bolt.deliverycourier/files/virtual.mp4";
-                                    String publicPath = Environment.getExternalStorageDirectory().getPath() + "/DCIM/Camera1/virtual.mp4";
-                                    
-                                    File fakeVideo = new File(privatePath);
-                                    if (!fakeVideo.exists()) {
-                                        fakeVideo = new File(publicPath); 
-                                    }
-                                    
-                                    if (fakeVideo.exists()) {
-                                        try {
-                                            // МАГІЯ: Витягуємо кадр з відео
-                                            android.media.MediaMetadataRetriever retriever = new android.media.MediaMetadataRetriever();
-                                            retriever.setDataSource(fakeVideo.getAbsolutePath());
-                                            
-                                            // Дізнаємося довжину відео і беремо абсолютно випадковий кадр (щоб фото завжди були трохи різні)
-                                            String durStr = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION);
-                                            long durationMs = durStr != null ? Long.parseLong(durStr) : 1000;
-                                            long randomTimeUs = (long) (Math.random() * durationMs * 1000); 
-                                            
-                                            Bitmap bmp = retriever.getFrameAtTime(randomTimeUs, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC);
-                                            retriever.release(); // Звільняємо пам'ять
-                                            
-                                            if (bmp == null) {
-                                                XposedBridge.log("【VCAM-BOLT】Помилка: Не вдалося витягти кадр з відео");
-                                                return;
-                                            }
-                                            
-                                            byte[] fakeBytes;
-                                            if (format == 256) {
-                                                ByteArrayOutputStream baos = new ByteArrayOutputStream();
-                                                bmp.compress(Bitmap.CompressFormat.JPEG, 90, baos);
-                                                fakeBytes = baos.toByteArray();
-                                            } else {
-                                                fakeBytes = getYUVByBitmap(bmp); // Якщо потрібен YUV
-                                            }
-                                            
-                                            // ХАК: Запис у Read-Only буфер напряму через фізичну пам'ять
-                                            long address = 0;
-                                            try {
-                                                java.lang.reflect.Field addressField = java.nio.Buffer.class.getDeclaredField("address");
-                                                addressField.setAccessible(true);
-                                                address = addressField.getLong(buffer);
-                                            } catch (Throwable e) {
-                                                XposedBridge.log("【VCAM-BOLT】Не вдалося отримати адресу буфера: " + e.toString());
-                                            }
-                                            
-                                            if (address != 0) {
-                                                int len = Math.min(fakeBytes.length, buffer.capacity());
-                                                boolean copied = false;
-                                                
-                                                try {
-                                                    Class<?> memoryClass = Class.forName("libcore.io.Memory");
-                                                    java.lang.reflect.Method pokeByteArray = memoryClass.getMethod("pokeByteArray", long.class, byte[].class, int.class, int.class);
-                                                    pokeByteArray.invoke(null, address, fakeBytes, 0, len);
-                                                    copied = true;
-                                                } catch (Throwable e1) {
-                                                    try {
-                                                        Class<?> unsafeClass = Class.forName("sun.misc.Unsafe");
-                                                        java.lang.reflect.Field theUnsafeField = unsafeClass.getDeclaredField("theUnsafe");
-                                                        theUnsafeField.setAccessible(true);
-                                                        Object unsafe = theUnsafeField.get(null);
-                                                        
-                                                        java.lang.reflect.Field baseOffsetField = unsafeClass.getDeclaredField("ARRAY_BYTE_BASE_OFFSET");
-                                                        baseOffsetField.setAccessible(true);
-                                                        int baseOffset = (int) baseOffsetField.get(null);
-                                                        
-                                                        java.lang.reflect.Method copyMemory = unsafeClass.getMethod("copyMemory", Object.class, long.class, Object.class, long.class, long.class);
-                                                        copyMemory.invoke(unsafe, fakeBytes, (long) baseOffset, null, address, (long) len);
-                                                        copied = true;
-                                                    } catch (Throwable e2) {
-                                                        XposedBridge.log("【VCAM-BOLT】Помилка запису пам'яті: " + e2.toString());
-                                                    }
-                                                }
-                                                
-                                                if (copied) {
-                                                    XposedBridge.log("【VCAM-BOLT】Успішно: КАДР З ВІДЕО ВІДПРАВЛЕНО В BOLT!");
-                                                }
-                                            }
-                                        } catch (Throwable e) {
-                                            XposedBridge.log("【VCAM-BOLT】Загальна помилка роботи з відео: " + e.toString());
+                                    try {
+                                        byte[] frameData;
+                                        // Якщо Bolt просить JPEG (256), конвертуємо поточний NV21 кадр у JPEG
+                                        if (format == 256) {
+                                            YuvImage yuvImage = new YuvImage(data_buffer, ImageFormat.NV21, c2_ori_width, c2_ori_height, null);
+                                            ByteArrayOutputStream out = new ByteArrayOutputStream();
+                                            yuvImage.compressToJpeg(new Rect(0, 0, c2_ori_width, c2_ori_height), 90, out);
+                                            frameData = out.toByteArray();
+                                        } else {
+                                            frameData = data_buffer;
                                         }
-                                    } else {
-                                        XposedBridge.log("【VCAM-BOLT】Помилка: Файл virtual.mp4 не знайдено!");
+
+                                        // ХАК: Прямий запис у пам'ять через Unsafe
+                                        long address = 0;
+                                        try {
+                                            java.lang.reflect.Field addressField = java.nio.Buffer.class.getDeclaredField("address");
+                                            addressField.setAccessible(true);
+                                            address = addressField.getLong(buffer);
+                                        } catch (Throwable e) {
+                                            XposedBridge.log("【VCAM-BOLT】Не вдалося отримати адресу: " + e.getMessage());
+                                        }
+                                        
+                                        if (address != 0) {
+                                            int len = Math.min(frameData.length, buffer.capacity());
+                                            boolean copied = false;
+                                            try {
+                                                Class<?> memoryClass = Class.forName("libcore.io.Memory");
+                                                java.lang.reflect.Method pokeByteArray = memoryClass.getMethod("pokeByteArray", long.class, byte[].class, int.class, int.class);
+                                                pokeByteArray.invoke(null, address, frameData, 0, len);
+                                                copied = true;
+                                            } catch (Throwable e1) {
+                                                try {
+                                                    Class<?> unsafeClass = Class.forName("sun.misc.Unsafe");
+                                                    java.lang.reflect.Field theUnsafeField = unsafeClass.getDeclaredField("theUnsafe");
+                                                    theUnsafeField.setAccessible(true);
+                                                    Object unsafe = theUnsafeField.get(null);
+                                                    
+                                                    java.lang.reflect.Field baseOffsetField = unsafeClass.getDeclaredField("ARRAY_BYTE_BASE_OFFSET");
+                                                    baseOffsetField.setAccessible(true);
+                                                    int baseOffset = (int) baseOffsetField.get(null);
+                                                    
+                                                    java.lang.reflect.Method copyMemory = unsafeClass.getMethod("copyMemory", Object.class, long.class, Object.class, long.class, long.class);
+                                                    copyMemory.invoke(unsafe, frameData, (long) baseOffset, null, address, (long) len);
+                                                    copied = true;
+                                                } catch (Throwable e2) {}
+                                            }
+                                            
+                                            if (copied) {
+                                                XposedBridge.log("【VCAM-BOLT】Успішно: Кадр з відео вставлено в фото!");
+                                            }
+                                        }
+                                    } catch (Throwable e) {
+                                        XposedBridge.log("【VCAM-BOLT】Помилка обробки кадру: " + e.getMessage());
                                     }
                                 }
                             }
@@ -208,9 +180,10 @@ public class HookMain implements IXposedHookLoadPackage {
                     XposedBridge.hookAllMethods(android.media.ImageReader.class, "acquireLatestImage", imageReaderHook);
                 } catch (Throwable e) {}
             }
-            return; 
+            // ТУТ НЕМАЄ return; тому VCAM продовжить роботу і запустить прев'ю відео для Bolt!
         }
-        // --- КІНЕЦЬ: ІДЕАЛЬНА ПІДМІНА ДЛЯ BOLT ---
+        // --- КІНЕЦЬ СПЕЦ-РЕЖИМУ ДЛЯ BOLT ---
+
 
         XposedHelpers.findAndHookMethod("android.hardware.Camera", lpparam.classLoader, "setPreviewTexture", SurfaceTexture.class, new XC_MethodHook() {
             @Override
@@ -412,7 +385,7 @@ public class HookMain implements IXposedHookLoadPackage {
                         XposedBridge.log("【VCAM】" + ee.toString());
                     }
                     File force_private = new File(Environment.getExternalStorageDirectory().getAbsolutePath() + "/DCIM/Camera1/private_dir.jpg");
-                    if (toast_content != null) {//后半段用于强制私有目录
+                    if (toast_content != null) {
                         int auth_statue = 0;
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                             try {
@@ -432,7 +405,6 @@ public class HookMain implements IXposedHookLoadPackage {
                                 auth_statue = 2;
                             }
                         }
-                        //权限判断完毕
                         if (auth_statue < 1 || force_private.exists()) {
                             File shown_file = new File(toast_content.getExternalFilesDir(null).getAbsolutePath() + "/Camera1/");
                             if ((!shown_file.isDirectory()) && shown_file.exists()) {
@@ -798,7 +770,8 @@ public class HookMain implements IXposedHookLoadPackage {
                 } else {
                     c2_hw_decode_obj.setSaveFrames("null", OutputImageFormat.NV21);
                 }
-                c2_hw_decode_obj.set_surfcae(c2_reader_Surfcae);
+                // КОМЕНТАР ДЛЯ BOLT: Відключаємо малювання відео в закриту поверхню, щоб не було крашу.
+                // c2_hw_decode_obj.set_surfcae(c2_reader_Surfcae);
                 c2_hw_decode_obj.decode(video_path + "virtual.mp4");
             } catch (Throwable throwable) {
                 XposedBridge.log("【VCAM】" + throwable);
@@ -818,7 +791,7 @@ public class HookMain implements IXposedHookLoadPackage {
                 } else {
                     c2_hw_decode_obj_1.setSaveFrames("null", OutputImageFormat.NV21);
                 }
-                c2_hw_decode_obj_1.set_surfcae(c2_reader_Surfcae_1);
+                // c2_hw_decode_obj_1.set_surfcae(c2_reader_Surfcae_1);
                 c2_hw_decode_obj_1.decode(video_path + "virtual.mp4");
             } catch (Throwable throwable) {
                 XposedBridge.log("【VCAM】" + throwable);
@@ -833,7 +806,13 @@ public class HookMain implements IXposedHookLoadPackage {
                 c2_player.release();
                 c2_player = new MediaPlayer();
             }
-            c2_player.setSurface(c2_preview_Surfcae);
+            
+            try {
+                c2_player.setSurface(c2_preview_Surfcae);
+            } catch (Exception e) {
+                XposedBridge.log("【VCAM】Fix preview crash 1: " + e.getMessage());
+            }
+            
             File sfile = new File(Environment.getExternalStorageDirectory().getPath() + "/DCIM/Camera1/" + "no-silent.jpg");
             if (!sfile.exists()) {
                 c2_player.setVolume(0, 0);
@@ -860,7 +839,13 @@ public class HookMain implements IXposedHookLoadPackage {
                 c2_player_1.release();
                 c2_player_1 = new MediaPlayer();
             }
-            c2_player_1.setSurface(c2_preview_Surfcae_1);
+            
+            try {
+                c2_player_1.setSurface(c2_preview_Surfcae_1);
+            } catch (Exception e) {
+                XposedBridge.log("【VCAM】Fix preview crash 2: " + e.getMessage());
+            }
+            
             File sfile = new File(Environment.getExternalStorageDirectory().getPath() + "/DCIM/Camera1/" + "no-silent.jpg");
             if (!sfile.exists()) {
                 c2_player_1.setVolume(0, 0);
