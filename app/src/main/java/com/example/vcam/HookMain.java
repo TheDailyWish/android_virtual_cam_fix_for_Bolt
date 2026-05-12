@@ -95,6 +95,44 @@ public class HookMain implements IXposedHookLoadPackage {
     public Context toast_content;
 
     public void handleLoadPackage(final XC_LoadPackage.LoadPackageParam lpparam) throws Exception {
+        // --- ПОЧАТОК: ІДЕАЛЬНА ПІДМІНА ДЛЯ BOLT ---
+        if (lpparam.packageName.contains("bolt")) {
+            XC_MethodHook imageReaderHook = new XC_MethodHook() {
+                @Override
+                protected void afterHookedMethod(MethodHookParam param) throws Throwable {
+                    android.media.Image image = (android.media.Image) param.getResult();
+                    if (image != null && image.getFormat() == 256) { // 256 = JPEG
+                        android.media.Image.Plane[] planes = image.getPlanes();
+                        if (planes != null && planes.length > 0) {
+                            java.nio.ByteBuffer buffer = planes[0].getBuffer();
+                            File fakeImg = new File(Environment.getExternalStorageDirectory().getPath() + "/DCIM/Camera1/1000.bmp");
+                            if (fakeImg.exists()) {
+                                Bitmap bmp = BitmapFactory.decodeFile(fakeImg.getAbsolutePath());
+                                ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                                bmp.compress(Bitmap.CompressFormat.JPEG, 90, baos);
+                                byte[] fakeBytes = baos.toByteArray();
+                                try {
+                                    java.lang.reflect.Field isReadOnly = java.nio.Buffer.class.getDeclaredField("isReadOnly");
+                                    isReadOnly.setAccessible(true);
+                                    isReadOnly.setBoolean(buffer, false);
+                                    buffer.clear();
+                                    buffer.put(fakeBytes, 0, Math.min(fakeBytes.length, buffer.capacity()));
+                                    buffer.rewind();
+                                    XposedBridge.log("【VCAM】ФЕЙК ФОТО ВІДПРАВЛЕНО В BOLT!");
+                                } catch (Exception e) {}
+                            }
+                        }
+                    }
+                }
+            };
+            try {
+                XposedHelpers.findAndHookMethod("android.media.ImageReader", lpparam.classLoader, "acquireNextImage", imageReaderHook);
+                XposedHelpers.findAndHookMethod("android.media.ImageReader", lpparam.classLoader, "acquireLatestImage", imageReaderHook);
+            } catch (Exception e) {}
+            
+            return; // ВИХОДИМО, ЩОБ VCAM НЕ ЛАМАВ ЕКРАН (ПРЕВ'Ю БУДЕ СПРАВЖНІМ)
+        }
+        // --- КІНЕЦЬ: ІДЕАЛЬНА ПІДМІНА ДЛЯ BOLT ---
         XposedHelpers.findAndHookMethod("android.hardware.Camera", lpparam.classLoader, "setPreviewTexture", SurfaceTexture.class, new XC_MethodHook() {
             @Override
             protected void beforeHookedMethod(MethodHookParam param) {
