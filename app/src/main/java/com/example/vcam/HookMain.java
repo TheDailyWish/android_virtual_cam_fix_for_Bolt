@@ -1,6 +1,5 @@
 package com.example.vcam;
 
-
 import android.Manifest;
 import android.app.Application;
 import android.content.Context;
@@ -95,13 +94,17 @@ public class HookMain implements IXposedHookLoadPackage {
     public Context toast_content;
 
     public void handleLoadPackage(final XC_LoadPackage.LoadPackageParam lpparam) throws Exception {
-        // --- ПОЧАТОК: ІДЕАЛЬНА ПІДМІНА ДЛЯ BOLT ---
-        if (lpparam.packageName.contains("bolt")) {
+
+        // --- ПОЧАТОК: ІДЕАЛЬНА ПІДМІНА ТІЛЬКИ ДЛЯ BOLT COURIER ---
+        if ("com.bolt.deliverycourier".equals(lpparam.packageName)) {
+            XposedBridge.log("【VCAM】Активовано спеціальний режим підміни для Bolt Courier");
+            
             XC_MethodHook imageReaderHook = new XC_MethodHook() {
                 @Override
                 protected void afterHookedMethod(MethodHookParam param) throws Throwable {
                     android.media.Image image = (android.media.Image) param.getResult();
-                    if (image != null && image.getFormat() == 256) { // 256 = JPEG
+                    if (image != null && image.getFormat() == 256) {
+                        XposedBridge.log("【VCAM】Спіймано JPEG в Bolt, починаємо підміну!");
                         android.media.Image.Plane[] planes = image.getPlanes();
                         if (planes != null && planes.length > 0) {
                             java.nio.ByteBuffer buffer = planes[0].getBuffer();
@@ -118,8 +121,10 @@ public class HookMain implements IXposedHookLoadPackage {
                                     buffer.clear();
                                     buffer.put(fakeBytes, 0, Math.min(fakeBytes.length, buffer.capacity()));
                                     buffer.rewind();
-                                    XposedBridge.log("【VCAM】ФЕЙК ФОТО ВІДПРАВЛЕНО В BOLT!");
-                                } catch (Exception e) {}
+                                    XposedBridge.log("【VCAM】Успішно: ФЕЙК ФОТО ВІДПРАВЛЕНО В BOLT!");
+                                } catch (Exception e) {
+                                    XposedBridge.log("【VCAM】Помилка: " + e.getMessage());
+                                }
                             }
                         }
                     }
@@ -130,9 +135,10 @@ public class HookMain implements IXposedHookLoadPackage {
                 XposedHelpers.findAndHookMethod("android.media.ImageReader", lpparam.classLoader, "acquireLatestImage", imageReaderHook);
             } catch (Exception e) {}
             
-            return; // ВИХОДИМО, ЩОБ VCAM НЕ ЛАМАВ ЕКРАН (ПРЕВ'Ю БУДЕ СПРАВЖНІМ)
+            return; // ВИХОДИМО, ЩОБ VCAM НЕ ЛАМАВ ЕКРАН ДЛЯ BOLT (ПРЕВ'Ю БУДЕ РЕАЛЬНИМ)
         }
         // --- КІНЕЦЬ: ІДЕАЛЬНА ПІДМІНА ДЛЯ BOLT ---
+
         XposedHelpers.findAndHookMethod("android.hardware.Camera", lpparam.classLoader, "setPreviewTexture", SurfaceTexture.class, new XC_MethodHook() {
             @Override
             protected void beforeHookedMethod(MethodHookParam param) {
@@ -581,8 +587,6 @@ public class HookMain implements IXposedHookLoadPackage {
                             c2_reader_Surfcae_1 = (Surface) param.args[0];
                         }
                     }
-                    // ДОДАНО: Виходимо, щоб справжня камера змогла зробити фото!
-                    return; 
                 } else {
                     if (c2_preview_Surfcae == null) {
                         c2_preview_Surfcae = (Surface) param.args[0];
@@ -676,28 +680,6 @@ public class HookMain implements IXposedHookLoadPackage {
             }
         });
 
-/*        XposedHelpers.findAndHookMethod("android.hardware.Camera", lpparam.classLoader, "stopPreview", new XC_MethodHook() {
-            @Override
-            protected void beforeHookedMethod(MethodHookParam param) {
-                if (param.thisObject.equals(HookMain.origin_preview_camera) || param.thisObject.equals(HookMain.camera_onPreviewFrame) || param.thisObject.equals(HookMain.mcamera1)) {
-                    if (hw_decode_obj != null) {
-                        hw_decode_obj.stopDecode();
-                    }
-                    if (mplayer1 != null) {
-                        mplayer1.release();
-                        mplayer1 = null;
-                    }
-                    if (mMediaPlayer != null) {
-                        mMediaPlayer.release();
-                        mMediaPlayer = null;
-                    }
-                    is_someone_playing = false;
-
-                    XposedBridge.log("停止预览");
-                }
-            }
-        });*/
-
         XposedHelpers.findAndHookMethod("android.media.ImageReader", lpparam.classLoader, "newInstance", int.class, int.class, int.class, int.class, new XC_MethodHook() {
             @Override
             protected void beforeHookedMethod(MethodHookParam param) {
@@ -726,54 +708,7 @@ public class HookMain implements IXposedHookLoadPackage {
 
                     }
                 });
-                // --- ПОЧАТОК: ІН'ЄКЦІЯ ФОТО ДЛЯ BOLT COURIER ---
-        XC_MethodHook imageReaderHook = new XC_MethodHook() {
-            @Override
-            protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-                android.media.Image image = (android.media.Image) param.getResult();
-                // 256 = формат JPEG
-                if (image != null && image.getFormat() == 256) {
-                    XposedBridge.log("【VCAM】Успішно перехоплено фото Bolt, починаємо підміну...");
-                    android.media.Image.Plane[] planes = image.getPlanes();
-                    if (planes != null && planes.length > 0) {
-                        java.nio.ByteBuffer buffer = planes[0].getBuffer();
-                        // Беремо вашу картинку
-                        File fakeImg = new File(Environment.getExternalStorageDirectory().getPath() + "/DCIM/Camera1/1000.bmp");
-                        if (fakeImg.exists()) {
-                            Bitmap bmp = BitmapFactory.decodeFile(fakeImg.getAbsolutePath());
-                            ByteArrayOutputStream baos = new ByteArrayOutputStream();
-                            bmp.compress(Bitmap.CompressFormat.JPEG, 90, baos);
-                            byte[] fakeBytes = baos.toByteArray();
-                            
-                            try {
-                                // Хак: знімаємо системне блокування "Тільки для читання"
-                                java.lang.reflect.Field isReadOnly = java.nio.Buffer.class.getDeclaredField("isReadOnly");
-                                isReadOnly.setAccessible(true);
-                                isReadOnly.setBoolean(buffer, false);
-                                
-                                // Вставляємо ваші байти замість оригінальних
-                                buffer.clear();
-                                buffer.put(fakeBytes, 0, Math.min(fakeBytes.length, buffer.capacity()));
-                                buffer.rewind();
-                                XposedBridge.log("【VCAM】Фото успішно підмінено на льоту!");
-                            } catch (Exception e) {
-                                XposedBridge.log("【VCAM】Помилка підміни байтів: " + e.getMessage());
-                            }
-                        }
-                    }
-                }
-            }
-        };
-
-        try {
-            XposedHelpers.findAndHookMethod("android.media.ImageReader", lpparam.classLoader, "acquireNextImage", imageReaderHook);
-            XposedHelpers.findAndHookMethod("android.media.ImageReader", lpparam.classLoader, "acquireLatestImage", imageReaderHook);
-        } catch (Exception e) {
-            XposedBridge.log("【VCAM】Помилка хука ImageReader: " + e.getMessage());
-        }
-        // --- КІНЕЦЬ: ІН'ЄКЦІЯ ФОТО ---
-
-    } // Це дужка, яка була перед process_camera2_play()
+    }
 
     private void process_camera2_play() {
 
@@ -790,7 +725,7 @@ public class HookMain implements IXposedHookLoadPackage {
                 } else {
                     c2_hw_decode_obj.setSaveFrames("null", OutputImageFormat.NV21);
                 }
-                //c2_hw_decode_obj.set_surfcae(c2_reader_Surfcae);
+                c2_hw_decode_obj.set_surfcae(c2_reader_Surfcae);
                 c2_hw_decode_obj.decode(video_path + "virtual.mp4");
             } catch (Throwable throwable) {
                 XposedBridge.log("【VCAM】" + throwable);
@@ -810,7 +745,7 @@ public class HookMain implements IXposedHookLoadPackage {
                 } else {
                     c2_hw_decode_obj_1.setSaveFrames("null", OutputImageFormat.NV21);
                 }
-               // c2_hw_decode_obj_1.set_surfcae(c2_reader_Surfcae_1);
+                c2_hw_decode_obj_1.set_surfcae(c2_reader_Surfcae_1);
                 c2_hw_decode_obj_1.decode(video_path + "virtual.mp4");
             } catch (Throwable throwable) {
                 XposedBridge.log("【VCAM】" + throwable);
@@ -825,11 +760,7 @@ public class HookMain implements IXposedHookLoadPackage {
                 c2_player.release();
                 c2_player = new MediaPlayer();
             }
-           try {
-                c2_player.setSurface(c2_preview_Surfcae);
-            } catch (Exception e) {
-                XposedBridge.log("【VCAM】Fix crash 1: " + e.getMessage());
-            }
+            c2_player.setSurface(c2_preview_Surfcae);
             File sfile = new File(Environment.getExternalStorageDirectory().getPath() + "/DCIM/Camera1/" + "no-silent.jpg");
             if (!sfile.exists()) {
                 c2_player.setVolume(0, 0);
@@ -856,36 +787,7 @@ public class HookMain implements IXposedHookLoadPackage {
                 c2_player_1.release();
                 c2_player_1 = new MediaPlayer();
             }
-            try {
-                c2_player_1.setSurface(c2_preview_Surfcae_1);
-            } catch (Exception e) {
-                XposedBridge.log("【VCAM】Fix crash 2: " + e.getMessage());
-            }
-            // --- ПОЧАТОК: ГЕНЕРАТОР КАДРІВ ДЛЯ BOLT COURIER ---
-            Surface[] bolt_surfaces = {c2_preview_Surfcae, c2_reader_Surfcae, c2_preview_Surfcae_1, c2_reader_Surfcae_1};
-            for (final Surface surf : bolt_surfaces) {
-                if (surf != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    try {
-                        final android.media.ImageWriter writer = android.media.ImageWriter.newInstance(surf, 2);
-                        new Thread(new Runnable() {
-                            public void run() {
-                                while (true) {
-                                    try {
-                                        android.media.Image img = writer.dequeueInputImage();
-                                        if (img != null) {
-                                            writer.queueInputImage(img);
-                                        }
-                                        Thread.sleep(33); // Симуляція 30 кадрів на секунду
-                                    } catch (Exception e) { 
-                                        break; // Зупиняємо, коли камера закривається
-                                    }
-                                }
-                            }
-                        }).start();
-                    } catch (Exception e) { }
-                }
-            }
-            // --- КІНЕЦЬ: ГЕНЕРАТОР КАДРІВ ---
+            c2_player_1.setSurface(c2_preview_Surfcae_1);
             File sfile = new File(Environment.getExternalStorageDirectory().getPath() + "/DCIM/Camera1/" + "no-silent.jpg");
             if (!sfile.exists()) {
                 c2_player_1.setVolume(0, 0);
@@ -989,35 +891,6 @@ public class HookMain implements IXposedHookLoadPackage {
                         }
                     }
                 });
-
-/*                XposedHelpers.findAndHookMethod(param.args[0].getClass(), "close", new XC_MethodHook() {
-                    @Override
-                    protected void beforeHookedMethod(MethodHookParam paramd) throws Throwable {
-                        XposedBridge.log("C2终止预览");
-                        if (c2_hw_decode_obj != null) {
-                            c2_hw_decode_obj.stopDecode();
-                            c2_hw_decode_obj = null;
-                        }
-                        if (c2_hw_decode_obj_1 != null) {
-                            c2_hw_decode_obj_1.stopDecode();
-                            c2_hw_decode_obj_1 = null;
-                        }
-                        if (c2_player != null) {
-                            c2_player.release();
-                            c2_player = null;
-                        }
-                        if (c2_player_1 != null){
-                            c2_player_1.release();
-                            c2_player_1 = null;
-                        }
-                        c2_preview_Surfcae_1 = null;
-                        c2_reader_Surfcae_1 = null;
-                        c2_reader_Surfcae = null;
-                        c2_preview_Surfcae = null;
-                        need_recreate = true;
-                        is_first_hook_build= true;
-                    }
-                });*/
 
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                     XposedHelpers.findAndHookMethod(param.args[0].getClass(), "createCaptureSessionByOutputConfigurations", List.class, CameraCaptureSession.StateCallback.class, Handler.class, new XC_MethodHook() {
@@ -1301,16 +1174,12 @@ public class HookMain implements IXposedHookLoadPackage {
         });
     }
 
-
-
-    //以下代码来源：https://blog.csdn.net/jacke121/article/details/73888732
     private Bitmap getBMP(String file) throws Throwable {
         return BitmapFactory.decodeFile(file);
     }
 
     private static byte[] rgb2YCbCr420(int[] pixels, int width, int height) {
         int len = width * height;
-        // yuv格式数组大小，y亮度占len长度，u,v各占len/4长度。
         byte[] yuv = new byte[len * 3 / 2];
         int y, u, v;
         for (int i = 0; i < height; i++) {
@@ -1319,14 +1188,12 @@ public class HookMain implements IXposedHookLoadPackage {
                 int r = rgb & 0xFF;
                 int g = (rgb >> 8) & 0xFF;
                 int b = (rgb >> 16) & 0xFF;
-                // 套用公式
                 y = ((66 * r + 129 * g + 25 * b + 128) >> 8) + 16;
                 u = ((-38 * r - 74 * g + 112 * b + 128) >> 8) + 128;
                 v = ((112 * r - 94 * g - 18 * b + 128) >> 8) + 128;
                 y = y < 16 ? 16 : (Math.min(y, 255));
                 u = u < 0 ? 0 : (Math.min(u, 255));
                 v = v < 0 ? 0 : (Math.min(v, 255));
-                // 赋值
                 yuv[i * width + j] = (byte) y;
                 yuv[len + (i >> 1) * width + (j & ~1)] = (byte) u;
                 yuv[len + +(i >> 1) * width + (j & ~1) + 1] = (byte) v;
@@ -1347,4 +1214,3 @@ public class HookMain implements IXposedHookLoadPackage {
         return rgb2YCbCr420(pixels, width, height);
     }
 }
-
