@@ -96,32 +96,16 @@ public class HookMain implements IXposedHookLoadPackage {
     public static Class c2_state_callback;
     public Context toast_content;
 
-    // Зберігаємо ім'я пакета для безпечних перевірок
     public static String current_package_name = "";
 
     public void handleLoadPackage(final XC_LoadPackage.LoadPackageParam lpparam) throws Exception {
         current_package_name = lpparam.packageName;
 
-        // --- СПЕЦ-РЕЖИМ ДЛЯ BOLT (РОЗДІЛЕННЯ ПРЕВ'Ю ТА ФОТО) ---
+        // --- СПЕЦ-РЕЖИМ ДЛЯ BOLT (ВІДЕО-ПРЕВ'Ю + ВІДЕО-ФОТО) ---
         if (lpparam.processName != null && lpparam.processName.contains("bolt")) {
             if ("com.bolt.deliverycourier".equals(lpparam.packageName)) {
-                XposedBridge.log("【VCAM-BOLT】Активовано смарт-режим поділу поверхонь для Bolt Courier");
-
-                // 1. Точно ідентифікуємо поверхню для ФОТО
-                try {
-                    XposedBridge.hookAllMethods(android.media.ImageReader.class, "getSurface", new XC_MethodHook() {
-                        @Override
-                        protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-                            Surface surf = (Surface) param.getResult();
-                            if (surf != null) {
-                                c2_reader_Surfcae = surf; // Запам'ятовуємо цю поверхню глобально
-                                XposedBridge.log("【VCAM-BOLT】Знайдено точну поверхню сканера фото: " + surf.toString());
-                            }
-                        }
-                    });
-                } catch (Throwable e) {}
+                XposedBridge.log("【VCAM-BOLT】Активовано повну підміну відео для Bolt Courier");
                 
-                // 2. Механізм запису кадру з відео у фото (як ми робили минулого разу)
                 XC_MethodHook imageReaderHook = new XC_MethodHook() {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) throws Throwable {
@@ -132,6 +116,7 @@ public class HookMain implements IXposedHookLoadPackage {
                                 android.media.Image.Plane[] planes = image.getPlanes();
                                 if (planes != null && planes.length > 0) {
                                     java.nio.ByteBuffer buffer = planes[0].getBuffer();
+                                    
                                     try {
                                         byte[] frameData;
                                         if (format == 256) {
@@ -175,7 +160,7 @@ public class HookMain implements IXposedHookLoadPackage {
                                                 } catch (Throwable e2) {}
                                             }
                                             if (copied) {
-                                                XposedBridge.log("【VCAM-BOLT】Успішно: Синхронний кадр з відео вставлено в фото!");
+                                                XposedBridge.log("【VCAM-BOLT】Успішно: Кадр з відео вставлено в фото!");
                                             }
                                         }
                                     } catch (Throwable e) {
@@ -192,7 +177,7 @@ public class HookMain implements IXposedHookLoadPackage {
                 } catch (Throwable e) {}
             }
         }
-        // --- КІНЕЦЬ СПЕЦ-РЕЖИМУ ---
+        // --- КІНЕЦЬ СПЕЦ-РЕЖИМУ ДЛЯ BOLT ---
 
         XposedHelpers.findAndHookMethod("android.hardware.Camera", lpparam.classLoader, "setPreviewTexture", SurfaceTexture.class, new XC_MethodHook() {
             @Override
@@ -255,8 +240,6 @@ public class HookMain implements IXposedHookLoadPackage {
                     return;
                 }
                 File file = new File(video_path + "virtual.mp4");
-                File toast_control = new File(Environment.getExternalStorageDirectory().getPath() + "/DCIM/Camera1/" + "no_toast.jpg");
-                need_to_show_toast = !toast_control.exists();
                 if (!file.exists()) {
                     return;
                 }
@@ -321,13 +304,6 @@ public class HookMain implements IXposedHookLoadPackage {
             protected void afterHookedMethod(MethodHookParam param) {
                 if (param.args[1] != null) process_a_shot_YUV(param);
                 if (param.args[3] != null) process_a_shot_jpeg(param, 3);
-            }
-        });
-
-        XposedHelpers.findAndHookMethod("android.media.MediaRecorder", lpparam.classLoader, "setCamera", Camera.class, new XC_MethodHook() {
-            @Override
-            protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                super.beforeHookedMethod(param);
             }
         });
 
@@ -472,13 +448,19 @@ public class HookMain implements IXposedHookLoadPackage {
                 
                 Surface target = (Surface) param.args[0];
 
-                // --- НОВА СМАРТ-ЛОГІКА МАРШРУТИЗАЦІЇ ---
+                // --- НОВА СМАРТ-ЛОГІКА МАРШРУТИЗАЦІЇ ДЛЯ BOLT ---
                 if ("com.bolt.deliverycourier".equals(current_package_name)) {
-                    if (c2_reader_Surfcae != null && target.equals(c2_reader_Surfcae)) {
-                        XposedBridge.log("【VCAM-BOLT】addTarget: Поверхня для ФОТО. Пропускаємо.");
-                        return; // Залишаємо реальній камері, щоб вона активувала фото!
+                    String surfaceInfo = target.toString();
+                    if (surfaceInfo.contains("Surface(name=null)")) {
+                        XposedBridge.log("【VCAM-BOLT】addTarget: Поверхня ImageReader (" + surfaceInfo + "). Пропускаємо.");
+                        if (c2_reader_Surfcae == null) {
+                            c2_reader_Surfcae = target;
+                        } else if (!c2_reader_Surfcae.equals(target) && c2_reader_Surfcae_1 == null) {
+                            c2_reader_Surfcae_1 = target;
+                        }
+                        return; // Залишаємо реальній камері, щоб вона активувала фото без крашу!
                     } else {
-                        XposedBridge.log("【VCAM-BOLT】addTarget: Поверхня для ПРЕВ'Ю. Перенаправляємо.");
+                        XposedBridge.log("【VCAM-BOLT】addTarget: Поверхня ПРЕВ'Ю (" + surfaceInfo + "). Перенаправляємо.");
                         if (c2_preview_Surfcae == null) {
                             c2_preview_Surfcae = target;
                         } else if (!c2_preview_Surfcae.equals(target) && c2_preview_Surfcae_1 == null) {
@@ -490,7 +472,7 @@ public class HookMain implements IXposedHookLoadPackage {
                 }
                 // --- КІНЕЦЬ НОВОЇ ЛОГІКИ ---
 
-                String surfaceInfo = param.args[0].toString();
+                String surfaceInfo = target.toString();
                 if (surfaceInfo.contains("Surface(name=null)")) {
                     if (c2_reader_Surfcae == null) {
                         c2_reader_Surfcae = target;
@@ -574,11 +556,10 @@ public class HookMain implements IXposedHookLoadPackage {
                     c2_hw_decode_obj.setSaveFrames("null", OutputImageFormat.NV21);
                 }
                 
-                // Для Bolt не підключаємо поверхню, щоб уникнути крашу. Декодуємо тихо в пам'ять!
                 if (!"com.bolt.deliverycourier".equals(current_package_name)) {
                      c2_hw_decode_obj.set_surfcae(c2_reader_Surfcae);
                 } else {
-                     XposedBridge.log("【VCAM-BOLT】Декодер відео працює у фоновому режимі (без прив'язки до поверхні)");
+                     XposedBridge.log("【VCAM-BOLT】Декодер 1 працює у фоновому режимі");
                 }
                 c2_hw_decode_obj.decode(video_path + "virtual.mp4");
             } catch (Throwable throwable) {}
@@ -599,6 +580,8 @@ public class HookMain implements IXposedHookLoadPackage {
                 }
                 if (!"com.bolt.deliverycourier".equals(current_package_name)) {
                      c2_hw_decode_obj_1.set_surfcae(c2_reader_Surfcae_1);
+                } else {
+                     XposedBridge.log("【VCAM-BOLT】Декодер 2 працює у фоновому режимі");
                 }
                 c2_hw_decode_obj_1.decode(video_path + "virtual.mp4");
             } catch (Throwable throwable) {}
