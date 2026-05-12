@@ -475,23 +475,17 @@ public class HookMain implements IXposedHookLoadPackage {
                     if ((c2_reader_Surfcae != null && target.equals(c2_reader_Surfcae)) || 
                         (c2_reader_Surfcae_1 != null && target.equals(c2_reader_Surfcae_1))) {
                         XposedBridge.log("【VCAM-BOLT】addTarget: Точна Поверхня для ФОТО. Пропускаємо.");
-                        return; // Залишаємо реальній камері, щоб вона активувала фото!
-                    } else if (surfaceInfo.contains("Surface(name=null)")) {
-                        XposedBridge.log("【VCAM-BOLT】addTarget: Резервна Поверхня ImageReader (" + surfaceInfo + "). Пропускаємо.");
-                        if (c2_reader_Surfcae == null) {
-                            c2_reader_Surfcae = target;
-                        } else if (!c2_reader_Surfcae.equals(target) && c2_reader_Surfcae_1 == null) {
-                            c2_reader_Surfcae_1 = target;
-                        }
-                        return; // Пропускаємо
+                        return; // Дозволяємо камері зробити фото
                     } else {
-                        XposedBridge.log("【VCAM-BOLT】addTarget: Поверхня ПРЕВ'Ю (" + surfaceInfo + "). Перенаправляємо на віртуальну.");
+                        // ТУТ БУЛА ПРОБЛЕМА: ми пропускали прев'ю, якщо воно мало ім'я null.
+                        // Тепер ми перенаправляємо АБСОЛЮТНО ВСЕ (що не є фото-сканером) на віртуальну поверхню.
+                        XposedBridge.log("【VCAM-BOLT】addTarget: Поверхня ПРЕВ'Ю/АНАЛІЗУ (" + surfaceInfo + "). Перенаправляємо на віртуальну.");
                         if (c2_preview_Surfcae == null) {
                             c2_preview_Surfcae = target;
                         } else if (!c2_preview_Surfcae.equals(target) && c2_preview_Surfcae_1 == null) {
                             c2_preview_Surfcae_1 = target;
                         }
-                        param.args[0] = c2_virtual_surface; // Відключаємо реальну камеру від екрану
+                        param.args[0] = c2_virtual_surface; // Відключаємо реальну камеру від цього екрану!
                         return;
                     }
                 }
@@ -566,26 +560,27 @@ public class HookMain implements IXposedHookLoadPackage {
 
     private void process_camera2_play() {
 
-        if (c2_reader_Surfcae != null) {
-            if (c2_hw_decode_obj != null) {
-                c2_hw_decode_obj.stopDecode();
-                c2_hw_decode_obj = null;
-            }
-
-            c2_hw_decode_obj = new VideoToFrames();
-            try {
-                if (imageReaderFormat == 256) {
-                    c2_hw_decode_obj.setSaveFrames("null", OutputImageFormat.JPEG);
-                } else {
-                    c2_hw_decode_obj.setSaveFrames("null", OutputImageFormat.NV21);
-                }
-                
-                if (!is_bolt_process) {
-                     c2_hw_decode_obj.set_surfcae(c2_reader_Surfcae);
-                }
-                c2_hw_decode_obj.decode(video_path + "virtual.mp4");
-            } catch (Throwable throwable) {}
+        // ГАРАНТІЯ: Декодер відео тепер запускається завжди, щоб наповнювати data_buffer
+        if (c2_hw_decode_obj != null) {
+            c2_hw_decode_obj.stopDecode();
+            c2_hw_decode_obj = null;
         }
+
+        c2_hw_decode_obj = new VideoToFrames();
+        try {
+            if (imageReaderFormat == 256) {
+                c2_hw_decode_obj.setSaveFrames("null", OutputImageFormat.JPEG);
+            } else {
+                c2_hw_decode_obj.setSaveFrames("null", OutputImageFormat.NV21);
+            }
+            
+            if (!is_bolt_process) {
+                 if(c2_reader_Surfcae != null) c2_hw_decode_obj.set_surfcae(c2_reader_Surfcae);
+            } else {
+                 XposedBridge.log("【VCAM-BOLT】Декодер 1 працює у фоновому режимі");
+            }
+            c2_hw_decode_obj.decode(video_path + "virtual.mp4");
+        } catch (Throwable throwable) {}
 
         if (c2_reader_Surfcae_1 != null) {
             if (c2_hw_decode_obj_1 != null) {
@@ -602,6 +597,8 @@ public class HookMain implements IXposedHookLoadPackage {
                 }
                 if (!is_bolt_process) {
                      c2_hw_decode_obj_1.set_surfcae(c2_reader_Surfcae_1);
+                } else {
+                     XposedBridge.log("【VCAM-BOLT】Декодер 2 працює у фоновому режимі");
                 }
                 c2_hw_decode_obj_1.decode(video_path + "virtual.mp4");
             } catch (Throwable throwable) {}
@@ -671,7 +668,6 @@ public class HookMain implements IXposedHookLoadPackage {
                 c2_virtual_surface = null;
             }
             c2_virtual_surfaceTexture = new SurfaceTexture(15);
-            // ДОБАВЛЕНО: задаем обязательные дефолтные размеры, чтобы превью не было черным
             c2_virtual_surfaceTexture.setDefaultBufferSize(c2_ori_width == 0 ? 1280 : c2_ori_width, c2_ori_height == 0 ? 720 : c2_ori_height);
             c2_virtual_surface = new Surface(c2_virtual_surfaceTexture);
             need_recreate = false;
@@ -717,7 +713,7 @@ public class HookMain implements IXposedHookLoadPackage {
                 c2_preview_Surfcae = null;
                 is_first_hook_build = true;
 
-                // ДОБАВЛЕНЫ ПРОВЕРКИ ДЛЯ БОЛТА ПРИ СОЗДАНИИ СЕССИИ КАМЕРЫ, ЧТОБЫ ОНА НЕ ЗАВИСАЛА
+                // ДОБАВЛЯЄМО ВСІ ПОВЕРХНІ В СЕСІЮ ДЛЯ УНИКНЕННЯ КРАШУ
 
                 XposedHelpers.findAndHookMethod(param.args[0].getClass(), "createCaptureSession", List.class, CameraCaptureSession.StateCallback.class, Handler.class, new XC_MethodHook() {
                     @Override
@@ -727,11 +723,7 @@ public class HookMain implements IXposedHookLoadPackage {
                                 List<Surface> originalList = (List<Surface>) paramd.args[0];
                                 List<Surface> newList = new ArrayList<>();
                                 newList.add(c2_virtual_surface);
-                                for (Surface s : originalList) {
-                                    if (s != null && (s.equals(c2_reader_Surfcae) || s.equals(c2_reader_Surfcae_1) || s.toString().contains("name=null"))) {
-                                        if(!newList.contains(s)) newList.add(s);
-                                    }
-                                }
+                                if (originalList != null) newList.addAll(originalList);
                                 paramd.args[0] = newList;
                             } else {
                                 paramd.args[0] = Arrays.asList(c2_virtual_surface);
@@ -750,14 +742,7 @@ public class HookMain implements IXposedHookLoadPackage {
                                     List<OutputConfiguration> originalList = (List<OutputConfiguration>) paramd.args[0];
                                     List<OutputConfiguration> newList = new ArrayList<>();
                                     newList.add(new OutputConfiguration(c2_virtual_surface));
-                                    for (OutputConfiguration oc : originalList) {
-                                        if (oc != null && oc.getSurface() != null) {
-                                            Surface s = oc.getSurface();
-                                            if (s.equals(c2_reader_Surfcae) || s.equals(c2_reader_Surfcae_1) || s.toString().contains("name=null")) {
-                                                newList.add(oc);
-                                            }
-                                        }
-                                    }
+                                    if (originalList != null) newList.addAll(originalList);
                                     paramd.args[0] = newList;
                                 } else {
                                     outputConfiguration = new OutputConfiguration(c2_virtual_surface);
@@ -778,11 +763,7 @@ public class HookMain implements IXposedHookLoadPackage {
                                     List<Surface> originalList = (List<Surface>) paramd.args[0];
                                     List<Surface> newList = new ArrayList<>();
                                     newList.add(c2_virtual_surface);
-                                    for (Surface s : originalList) {
-                                        if (s != null && (s.equals(c2_reader_Surfcae) || s.equals(c2_reader_Surfcae_1) || s.toString().contains("name=null"))) {
-                                            if(!newList.contains(s)) newList.add(s);
-                                        }
-                                    }
+                                    if (originalList != null) newList.addAll(originalList);
                                     paramd.args[0] = newList;
                                 } else {
                                     paramd.args[0] = Arrays.asList(c2_virtual_surface);
@@ -803,11 +784,7 @@ public class HookMain implements IXposedHookLoadPackage {
                                         List<Surface> originalList = (List<Surface>) paramd.args[1];
                                         List<Surface> newList = new ArrayList<>();
                                         newList.add(c2_virtual_surface);
-                                        for (Surface s : originalList) {
-                                            if (s != null && (s.equals(c2_reader_Surfcae) || s.equals(c2_reader_Surfcae_1) || s.toString().contains("name=null"))) {
-                                                if(!newList.contains(s)) newList.add(s);
-                                            }
-                                        }
+                                        if (originalList != null) newList.addAll(originalList);
                                         paramd.args[1] = newList;
                                     } else {
                                         paramd.args[1] = Arrays.asList(c2_virtual_surface);
@@ -829,14 +806,7 @@ public class HookMain implements IXposedHookLoadPackage {
                                         List<OutputConfiguration> originalList = (List<OutputConfiguration>) paramd.args[1];
                                         List<OutputConfiguration> newList = new ArrayList<>();
                                         newList.add(new OutputConfiguration(c2_virtual_surface));
-                                        for (OutputConfiguration oc : originalList) {
-                                            if (oc != null && oc.getSurface() != null) {
-                                                Surface s = oc.getSurface();
-                                                if (s.equals(c2_reader_Surfcae) || s.equals(c2_reader_Surfcae_1) || s.toString().contains("name=null")) {
-                                                    newList.add(oc);
-                                                }
-                                            }
-                                        }
+                                        if (originalList != null) newList.addAll(originalList);
                                         paramd.args[1] = newList;
                                     } else {
                                         outputConfiguration = new OutputConfiguration(c2_virtual_surface);
@@ -860,14 +830,8 @@ public class HookMain implements IXposedHookLoadPackage {
                                         List<OutputConfiguration> originalList = originalConfig.getOutputConfigurations();
                                         List<OutputConfiguration> newList = new ArrayList<>();
                                         newList.add(new OutputConfiguration(c2_virtual_surface));
-                                        for (OutputConfiguration oc : originalList) {
-                                            if (oc != null && oc.getSurface() != null) {
-                                                Surface s = oc.getSurface();
-                                                if (s.equals(c2_reader_Surfcae) || s.equals(c2_reader_Surfcae_1) || s.toString().contains("name=null")) {
-                                                    newList.add(oc);
-                                                }
-                                            }
-                                        }
+                                        if (originalList != null) newList.addAll(originalList);
+                                        
                                         fake_sessionConfiguration = new SessionConfiguration(
                                                 originalConfig.getSessionType(),
                                                 newList,
