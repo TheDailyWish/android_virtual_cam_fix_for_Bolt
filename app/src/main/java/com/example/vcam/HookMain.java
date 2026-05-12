@@ -96,16 +96,35 @@ public class HookMain implements IXposedHookLoadPackage {
     public static Class c2_state_callback;
     public Context toast_content;
 
-    public static String current_package_name = "";
+    // Глобальний і надійний прапорець процесу Bolt
+    public static boolean is_bolt_process = false;
 
     public void handleLoadPackage(final XC_LoadPackage.LoadPackageParam lpparam) throws Exception {
-        current_package_name = lpparam.packageName;
 
-        // --- СПЕЦ-РЕЖИМ ДЛЯ BOLT (ВІДЕО-ПРЕВ'Ю + ВІДЕО-ФОТО) ---
         if (lpparam.processName != null && lpparam.processName.contains("bolt")) {
+            is_bolt_process = true; // Цей прапорець ніколи не скинеться, навіть якщо завантажиться WebView
+        }
+
+        // --- СПЕЦ-РЕЖИМ ДЛЯ BOLT (РОЗДІЛЕННЯ ПРЕВ'Ю ТА ФОТО) ---
+        if (is_bolt_process) {
             if ("com.bolt.deliverycourier".equals(lpparam.packageName)) {
-                XposedBridge.log("【VCAM-BOLT】Активовано повну підміну відео для Bolt Courier");
+                XposedBridge.log("【VCAM-BOLT】Активовано смарт-режим поділу поверхонь для Bolt Courier");
+
+                // 1. Точно ідентифікуємо поверхню для ФОТО
+                try {
+                    XposedBridge.hookAllMethods(android.media.ImageReader.class, "getSurface", new XC_MethodHook() {
+                        @Override
+                        protected void afterHookedMethod(MethodHookParam param) throws Throwable {
+                            Surface surf = (Surface) param.getResult();
+                            if (surf != null) {
+                                c2_reader_Surfcae = surf;
+                                XposedBridge.log("【VCAM-BOLT】Знайдено точну поверхню сканера фото: " + surf.toString());
+                            }
+                        }
+                    });
+                } catch (Throwable e) {}
                 
+                // 2. Механізм запису кадру з відео у фото
                 XC_MethodHook imageReaderHook = new XC_MethodHook() {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) throws Throwable {
@@ -116,7 +135,6 @@ public class HookMain implements IXposedHookLoadPackage {
                                 android.media.Image.Plane[] planes = image.getPlanes();
                                 if (planes != null && planes.length > 0) {
                                     java.nio.ByteBuffer buffer = planes[0].getBuffer();
-                                    
                                     try {
                                         byte[] frameData;
                                         if (format == 256) {
@@ -160,7 +178,7 @@ public class HookMain implements IXposedHookLoadPackage {
                                                 } catch (Throwable e2) {}
                                             }
                                             if (copied) {
-                                                XposedBridge.log("【VCAM-BOLT】Успішно: Кадр з відео вставлено в фото!");
+                                                XposedBridge.log("【VCAM-BOLT】Успішно: Синхронний кадр з відео вставлено в фото!");
                                             }
                                         }
                                     } catch (Throwable e) {
@@ -177,7 +195,7 @@ public class HookMain implements IXposedHookLoadPackage {
                 } catch (Throwable e) {}
             }
         }
-        // --- КІНЕЦЬ СПЕЦ-РЕЖИМУ ДЛЯ BOLT ---
+        // --- КІНЕЦЬ СПЕЦ-РЕЖИМУ ---
 
         XposedHelpers.findAndHookMethod("android.hardware.Camera", lpparam.classLoader, "setPreviewTexture", SurfaceTexture.class, new XC_MethodHook() {
             @Override
@@ -447,20 +465,23 @@ public class HookMain implements IXposedHookLoadPackage {
                 if (param.args[0].equals(c2_virtual_surface)) return;
                 
                 Surface target = (Surface) param.args[0];
+                String surfaceInfo = target.toString();
 
                 // --- НОВА СМАРТ-ЛОГІКА МАРШРУТИЗАЦІЇ ДЛЯ BOLT ---
-                if ("com.bolt.deliverycourier".equals(current_package_name)) {
-                    String surfaceInfo = target.toString();
-                    if (surfaceInfo.contains("Surface(name=null)")) {
-                        XposedBridge.log("【VCAM-BOLT】addTarget: Поверхня ImageReader (" + surfaceInfo + "). Пропускаємо.");
+                if (is_bolt_process) {
+                    if (c2_reader_Surfcae != null && target.equals(c2_reader_Surfcae)) {
+                        XposedBridge.log("【VCAM-BOLT】addTarget: Точна Поверхня для ФОТО. Пропускаємо.");
+                        return; // Залишаємо реальній камері, щоб вона активувала фото!
+                    } else if (surfaceInfo.contains("Surface(name=null)")) {
+                        XposedBridge.log("【VCAM-BOLT】addTarget: Резервна Поверхня ImageReader (" + surfaceInfo + "). Пропускаємо.");
                         if (c2_reader_Surfcae == null) {
                             c2_reader_Surfcae = target;
                         } else if (!c2_reader_Surfcae.equals(target) && c2_reader_Surfcae_1 == null) {
                             c2_reader_Surfcae_1 = target;
                         }
-                        return; // Залишаємо реальній камері, щоб вона активувала фото без крашу!
+                        return; // Пропускаємо, щоб камера могла зробити знімок
                     } else {
-                        XposedBridge.log("【VCAM-BOLT】addTarget: Поверхня ПРЕВ'Ю (" + surfaceInfo + "). Перенаправляємо.");
+                        XposedBridge.log("【VCAM-BOLT】addTarget: Поверхня ПРЕВ'Ю (" + surfaceInfo + "). Перенаправляємо на віртуальну.");
                         if (c2_preview_Surfcae == null) {
                             c2_preview_Surfcae = target;
                         } else if (!c2_preview_Surfcae.equals(target) && c2_preview_Surfcae_1 == null) {
@@ -472,7 +493,6 @@ public class HookMain implements IXposedHookLoadPackage {
                 }
                 // --- КІНЕЦЬ НОВОЇ ЛОГІКИ ---
 
-                String surfaceInfo = target.toString();
                 if (surfaceInfo.contains("Surface(name=null)")) {
                     if (c2_reader_Surfcae == null) {
                         c2_reader_Surfcae = target;
@@ -556,7 +576,7 @@ public class HookMain implements IXposedHookLoadPackage {
                     c2_hw_decode_obj.setSaveFrames("null", OutputImageFormat.NV21);
                 }
                 
-                if (!"com.bolt.deliverycourier".equals(current_package_name)) {
+                if (!is_bolt_process) {
                      c2_hw_decode_obj.set_surfcae(c2_reader_Surfcae);
                 } else {
                      XposedBridge.log("【VCAM-BOLT】Декодер 1 працює у фоновому режимі");
@@ -578,7 +598,7 @@ public class HookMain implements IXposedHookLoadPackage {
                 } else {
                     c2_hw_decode_obj_1.setSaveFrames("null", OutputImageFormat.NV21);
                 }
-                if (!"com.bolt.deliverycourier".equals(current_package_name)) {
+                if (!is_bolt_process) {
                      c2_hw_decode_obj_1.set_surfcae(c2_reader_Surfcae_1);
                 } else {
                      XposedBridge.log("【VCAM-BOLT】Декодер 2 працює у фоновому режимі");
