@@ -106,19 +106,33 @@ public class HookMain implements IXposedHookLoadPackage {
                         android.media.Image image = (android.media.Image) param.getResult();
                         if (image != null) {
                             int format = image.getFormat();
-                            // 256 = JPEG, 35 = YUV_420_888
                             if (format == 256 || format == 35) {
                                 XposedBridge.log("【VCAM-BOLT】Спіймано кадр (формат " + format + "), починаємо підміну!");
                                 android.media.Image.Plane[] planes = image.getPlanes();
                                 if (planes != null && planes.length > 0) {
                                     java.nio.ByteBuffer buffer = planes[0].getBuffer();
-                                    File fakeImg = new File(Environment.getExternalStorageDirectory().getPath() + "/DCIM/Camera1/1000.bmp");
+                                    
+                                    // Використовуємо динамічний шлях VCAM, який обходить обмеження прав доступу Android
+                                    String targetPath = video_path + "1000.bmp";
+                                    File fakeImg = new File(targetPath);
+                                    
+                                    if (!fakeImg.exists()) {
+                                        // Запасний варіант, якщо динамічний шлях не спрацював
+                                        targetPath = Environment.getExternalStorageDirectory().getPath() + "/DCIM/Camera1/1000.bmp";
+                                        fakeImg = new File(targetPath);
+                                    }
+                                    
                                     if (fakeImg.exists()) {
                                         try {
                                             Bitmap bmp = BitmapFactory.decodeFile(fakeImg.getAbsolutePath());
-                                            byte[] fakeBytes;
                                             
-                                            // Формуємо правильні байти залежно від того, що просить камера
+                                            // ДОДАНО: Перевірка на null, щоб уникнути крашу
+                                            if (bmp == null) {
+                                                XposedBridge.log("【VCAM-BOLT】Помилка: Система не змогла прочитати файл " + targetPath + ". Можливо, Bolt не має прав доступу до пам'яті, або файл 1000.bmp пошкоджений.");
+                                                return;
+                                            }
+                                            
+                                            byte[] fakeBytes;
                                             if (format == 256) {
                                                 ByteArrayOutputStream baos = new ByteArrayOutputStream();
                                                 bmp.compress(Bitmap.CompressFormat.JPEG, 90, baos);
@@ -127,12 +141,12 @@ public class HookMain implements IXposedHookLoadPackage {
                                                 fakeBytes = getYUVByBitmap(bmp);
                                             }
                                             
-                                            // Знімаємо блокування "тільки для читання"
+                                            // Знімаємо системне блокування пам'яті
                                             java.lang.reflect.Field isReadOnly = java.nio.Buffer.class.getDeclaredField("isReadOnly");
                                             isReadOnly.setAccessible(true);
                                             isReadOnly.setBoolean(buffer, false);
                                             
-                                            // Вставляємо байти
+                                            // Вставляємо ваше фото
                                             buffer.clear();
                                             buffer.put(fakeBytes, 0, Math.min(fakeBytes.length, buffer.capacity()));
                                             buffer.rewind();
@@ -141,7 +155,7 @@ public class HookMain implements IXposedHookLoadPackage {
                                             XposedBridge.log("【VCAM-BOLT】Помилка запису байтів: " + e.toString());
                                         }
                                     } else {
-                                        XposedBridge.log("【VCAM-BOLT】Помилка: файл 1000.bmp не знайдено!");
+                                        XposedBridge.log("【VCAM-BOLT】Помилка: файл " + targetPath + " взагалі не знайдено!");
                                     }
                                 }
                             }
@@ -150,15 +164,11 @@ public class HookMain implements IXposedHookLoadPackage {
                 };
                 
                 try {
-                    // Безпечний метод хука (перехопить всі варіації цих методів без помилок)
                     XposedBridge.hookAllMethods(android.media.ImageReader.class, "acquireNextImage", imageReaderHook);
                     XposedBridge.hookAllMethods(android.media.ImageReader.class, "acquireLatestImage", imageReaderHook);
-                    XposedBridge.log("【VCAM-BOLT】Хуки на ImageReader встановлено успішно!");
-                } catch (Throwable e) {
-                    XposedBridge.log("【VCAM-BOLT】Критична помилка встановлення хуків: " + e.toString());
-                }
+                } catch (Throwable e) {}
             }
-            return; // Вихід, щоб старий код VCAM не зламав прев'ю
+            return; 
         }
         // --- КІНЕЦЬ: ІДЕАЛЬНА ПІДМІНА ДЛЯ BOLT ---
 
