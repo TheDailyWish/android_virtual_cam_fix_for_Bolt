@@ -112,21 +112,19 @@ public class HookMain implements IXposedHookLoadPackage {
                                 if (planes != null && planes.length > 0) {
                                     java.nio.ByteBuffer buffer = planes[0].getBuffer();
                                     
-                                    // НОВИЙ ШЛЯХ: Приватна папка Bolt (повний доступ без дозволів)
                                     String privatePath = "/storage/emulated/0/Android/data/com.bolt.deliverycourier/files/1000.bmp";
                                     String publicPath = Environment.getExternalStorageDirectory().getPath() + "/DCIM/Camera1/1000.bmp";
                                     
                                     File fakeImg = new File(privatePath);
                                     if (!fakeImg.exists()) {
-                                        fakeImg = new File(publicPath); // Запасний варіант
+                                        fakeImg = new File(publicPath); 
                                     }
                                     
                                     if (fakeImg.exists()) {
                                         try {
                                             Bitmap bmp = BitmapFactory.decodeFile(fakeImg.getAbsolutePath());
-                                            
                                             if (bmp == null) {
-                                                XposedBridge.log("【VCAM-BOLT】Помилка: Немає прав на читання файлу " + fakeImg.getAbsolutePath());
+                                                XposedBridge.log("【VCAM-BOLT】Помилка: Немає прав на читання файлу");
                                                 return;
                                             }
                                             
@@ -139,19 +137,55 @@ public class HookMain implements IXposedHookLoadPackage {
                                                 fakeBytes = getYUVByBitmap(bmp);
                                             }
                                             
-                                            java.lang.reflect.Field isReadOnly = java.nio.Buffer.class.getDeclaredField("isReadOnly");
-                                            isReadOnly.setAccessible(true);
-                                            isReadOnly.setBoolean(buffer, false);
+                                            // ХАК: Запис у Read-Only буфер напряму через фізичну пам'ять
+                                            long address = 0;
+                                            try {
+                                                java.lang.reflect.Field addressField = java.nio.Buffer.class.getDeclaredField("address");
+                                                addressField.setAccessible(true);
+                                                address = addressField.getLong(buffer);
+                                            } catch (Throwable e) {
+                                                XposedBridge.log("【VCAM-BOLT】Не вдалося отримати адресу буфера: " + e.toString());
+                                            }
                                             
-                                            buffer.clear();
-                                            buffer.put(fakeBytes, 0, Math.min(fakeBytes.length, buffer.capacity()));
-                                            buffer.rewind();
-                                            XposedBridge.log("【VCAM-BOLT】Успішно: ФЕЙК ФОТО ВІДПРАВЛЕНО В BOLT!");
+                                            if (address != 0) {
+                                                int len = Math.min(fakeBytes.length, buffer.capacity());
+                                                boolean copied = false;
+                                                
+                                                try {
+                                                    // Спроба 1: Швидкий запис через libcore
+                                                    Class<?> memoryClass = Class.forName("libcore.io.Memory");
+                                                    java.lang.reflect.Method pokeByteArray = memoryClass.getMethod("pokeByteArray", long.class, byte[].class, int.class, int.class);
+                                                    pokeByteArray.invoke(null, address, fakeBytes, 0, len);
+                                                    copied = true;
+                                                } catch (Throwable e1) {
+                                                    // Спроба 2: Жорсткий запис через Unsafe (якщо libcore заблоковано)
+                                                    try {
+                                                        Class<?> unsafeClass = Class.forName("sun.misc.Unsafe");
+                                                        java.lang.reflect.Field theUnsafeField = unsafeClass.getDeclaredField("theUnsafe");
+                                                        theUnsafeField.setAccessible(true);
+                                                        Object unsafe = theUnsafeField.get(null);
+                                                        
+                                                        java.lang.reflect.Field baseOffsetField = unsafeClass.getDeclaredField("ARRAY_BYTE_BASE_OFFSET");
+                                                        baseOffsetField.setAccessible(true);
+                                                        int baseOffset = (int) baseOffsetField.get(null);
+                                                        
+                                                        java.lang.reflect.Method copyMemory = unsafeClass.getMethod("copyMemory", Object.class, long.class, Object.class, long.class, long.class);
+                                                        copyMemory.invoke(unsafe, fakeBytes, (long) baseOffset, null, address, (long) len);
+                                                        copied = true;
+                                                    } catch (Throwable e2) {
+                                                        XposedBridge.log("【VCAM-BOLT】Помилка запису пам'яті: " + e2.toString());
+                                                    }
+                                                }
+                                                
+                                                if (copied) {
+                                                    XposedBridge.log("【VCAM-BOLT】Успішно: ФЕЙК ФОТО ВІДПРАВЛЕНО В BOLT!");
+                                                }
+                                            }
                                         } catch (Throwable e) {
-                                            XposedBridge.log("【VCAM-BOLT】Помилка запису байтів: " + e.toString());
+                                            XposedBridge.log("【VCAM-BOLT】Загальна помилка: " + e.toString());
                                         }
                                     } else {
-                                        XposedBridge.log("【VCAM-BOLT】Помилка: Файл 1000.bmp не знайдено ні в " + privatePath + ", ні в " + publicPath);
+                                        XposedBridge.log("【VCAM-BOLT】Помилка: Файл 1000.bmp не знайдено");
                                     }
                                 }
                             }
